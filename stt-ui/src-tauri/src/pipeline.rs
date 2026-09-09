@@ -40,10 +40,7 @@ impl LlmProcessor {
         } else {
             config.model_dir.join(filename)
         };
-        let llm = match LlmCleanup::new(LlmBackend::Local, Some(&llm_model_path)) {
-            Ok(l) => Some(l),
-            Err(_) => None,
-        };
+        let llm = LlmCleanup::new(LlmBackend::Local, Some(&llm_model_path)).ok();
         Self { llm, config }
     }
 
@@ -148,7 +145,7 @@ impl PipelineController {
                 std::fs::remove_file(&silero_path)?;
                 eprintln!("[pipeline] removed invalid silero VAD file, re-downloading");
             }
-            std::fs::create_dir_all(&model_dir.join("silero-vad"))?;
+            std::fs::create_dir_all(model_dir.join("silero-vad"))?;
             let model_dir_dl = model_dir.join("silero-vad");
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -328,7 +325,15 @@ impl PipelineController {
                         match WhisperRecognizer::new(&model_dir, 4, false) {
                             Ok(mut r) => {
                                 if let Err(e) = r.set_language(&config_clone.language) {
-                                    let _ = app_clone.emit("asr_error", serde_json::json!({"error": e.to_string()}));
+                                    let _ = app_clone.emit(
+                                        "asr_error",
+                                        serde_json::json!({"error": e.to_string()}),
+                                    );
+                                    // Don't advertise readiness: the recognizer
+                                    // would transcribe in the wrong language.
+                                    // Clearing the flag lets the user retry.
+                                    running_clone.store(false, Ordering::SeqCst);
+                                    return;
                                 }
                                 whisper = Some(r);
                                 let _ = app_clone

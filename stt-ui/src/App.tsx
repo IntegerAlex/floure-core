@@ -37,8 +37,9 @@ const SettingsSchema = z.object({
   llmProvider: z.enum(["local", "deepseek", "openrouter"]),
   llmModel: z.string().max(100),
   llmFallback: z.string().max(100),
-  deepseekApiKey: z.string().max(200),
-  openrouterApiKey: z.string().max(200),
+  // API keys are session-only: never persisted (see save effect below).
+  deepseekApiKey: z.string().max(200).default(""),
+  openrouterApiKey: z.string().max(200).default(""),
   fastCommit: z.boolean(),
   typing: z.boolean(),
   clipboard: z.boolean(),
@@ -155,6 +156,33 @@ function detectRunMode(): RunMode {
     return "tauri";
   }
   return "ws";
+}
+
+// Push the selected local LLM to the Rust backend config. Tauri-only:
+// the IPC bridge doesn't exist in ws/browser mode, and failures must
+// not surface as unhandled rejections.
+function syncLocalLlmToRust(mode: RunMode, settings: RuntimeSettings, llmModel: string) {
+  if (mode !== "tauri") return;
+  void (async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("set_floure_config", {
+        config: {
+          asr_profile: settings.asrProfile === "auto" ? "Parakeet" : settings.asrProfile === "parakeet" ? "Parakeet" : settings.asrProfile === "whisper-turbo" ? "WhisperTurbo" : "WhisperBase",
+          language: settings.language || "en",
+          llm_provider: "Local",
+          llm_mode: settings.llmMode === "off" ? "Off" : settings.llmMode === "cleanup" ? "Cleanup" : settings.llmMode === "bullet_list" ? "BulletList" : settings.llmMode === "email" ? "Email" : "CommitMessage",
+          llm_model: llmModel,
+          typing_enabled: settings.typing,
+          clipboard_enabled: settings.clipboard,
+          dictation_mode: false,
+          hotkey: "ctrl+shift+s",
+        },
+      });
+    } catch (e) {
+      console.warn("[config] set_floure_config failed", e);
+    }
+  })();
 }
 
 function formatTimestamp(iso: string): string {
@@ -538,23 +566,8 @@ function ConfigView({
                   const provider = e.target.value as "local" | "deepseek" | "openrouter";
                   setSettings((s) => ({ ...s, llmProvider: provider }));
                   if (provider === "local") {
-                    // Sync the selected local model to Rust config
-                    void (async () => {
-                      const { invoke } = await import("@tauri-apps/api/core");
-                      await invoke("set_floure_config", {
-                        config: {
-                          asr_profile: settings.asrProfile === "auto" ? "Parakeet" : settings.asrProfile === "parakeet" ? "Parakeet" : settings.asrProfile === "whisper-turbo" ? "WhisperTurbo" : "WhisperBase",
-                          language: settings.language || "en",
-                          llm_provider: "Local",
-                          llm_mode: settings.llmMode === "off" ? "Off" : settings.llmMode === "cleanup" ? "Cleanup" : settings.llmMode === "bullet_list" ? "BulletList" : settings.llmMode === "email" ? "Email" : "CommitMessage",
-                          llm_model: settings.llmModel || "s1-mini-q4_k_m",
-                          typing_enabled: settings.typing,
-                          clipboard_enabled: settings.clipboard,
-                          dictation_mode: false,
-                          hotkey: "ctrl+shift+s",
-                        },
-                      });
-                    })();
+                    // Sync the selected local model to Rust config.
+                    syncLocalLlmToRust(mode, settings, settings.llmModel || "s1-mini-q4_k_m");
                   }
                 }}
                 maxWidth="max-w-[120px]"
@@ -573,22 +586,7 @@ function ConfigView({
                   onChange={(e) => {
                     const modelId = e.target.value;
                     setSettings((s) => ({ ...s, llmModel: modelId }));
-                    void (async () => {
-                      const { invoke } = await import("@tauri-apps/api/core");
-                      await invoke("set_floure_config", {
-                        config: {
-                          asr_profile: settings.asrProfile === "auto" ? "Parakeet" : settings.asrProfile === "parakeet" ? "Parakeet" : settings.asrProfile === "whisper-turbo" ? "WhisperTurbo" : "WhisperBase",
-                          language: settings.language || "en",
-                          llm_provider: "Local",
-                          llm_mode: settings.llmMode === "off" ? "Off" : settings.llmMode === "cleanup" ? "Cleanup" : settings.llmMode === "bullet_list" ? "BulletList" : settings.llmMode === "email" ? "Email" : "CommitMessage",
-                          llm_model: modelId,
-                          typing_enabled: settings.typing,
-                          clipboard_enabled: settings.clipboard,
-                          dictation_mode: false,
-                          hotkey: "ctrl+shift+s",
-                        },
-                      });
-                    })();
+                    syncLocalLlmToRust(mode, settings, modelId);
                   }}
                   maxWidth="max-w-[200px]"
                 >
@@ -1005,8 +1003,13 @@ function App() {
 
   useEffect(() => {
     try {
-      if (validateSettings(settings)) {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ ...settings, __version: SETTINGS_VERSION }));
+      // API keys stay in memory only — strip them before persisting so
+      // localStorage never holds secrets.
+      const { deepseekApiKey: _dk, openrouterApiKey: _ok, ...persisted } = settings;
+      void _dk;
+      void _ok;
+      if (validateSettings({ ...persisted, deepseekApiKey: "", openrouterApiKey: "" })) {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ ...persisted, __version: SETTINGS_VERSION }));
       } else {
         console.error("Invalid settings, not saving to localStorage");
       }

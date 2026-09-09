@@ -1,8 +1,8 @@
 # No hardcoded target — Cargo auto-detects host platform.
 # Build with: pnpm tauri build
 
-[env]
-# Lets the compiler find user-local SPIRV-Headers (needed by the
-# llama.cpp Vulkan backend; installed without sudo under ~/.local).
-# force=false so an explicitly exported value still wins.
-CPLUS_INCLUDE_PATH = { value = "/home/akshat/.local/include", force = false }
+# NOTE: the llama.cpp Vulkan backend needs SPIRV-Headers and glslc at
+# build time. These are machine-local (no sudo required) — see README
+# "GPU build prerequisites". Do NOT commit absolute include paths here;
+# CI provisions them in .github/workflows, local shells use
+# $CARGO_HOME/config.toml or exported CPLUS_INCLUDE_PATH.

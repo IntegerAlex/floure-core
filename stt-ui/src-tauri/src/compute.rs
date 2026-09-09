@@ -18,6 +18,10 @@ pub enum ComputeDevice {
     NvidiaDiscrete,
     /// AMD GPU (discrete or integrated) via the Vulkan backend.
     AmdGpu,
+    /// Explicitly forced GPU offload (`FLOURE_COMPUTE=vulkan|gpu` with no
+    /// detected hardware). Load may fail and fall back to no-LLM, but the
+    /// CPU path is never silently used when offload was requested.
+    VulkanForced,
     /// No usable GPU detected — CPU inference path.
     Cpu,
 }
@@ -32,6 +36,7 @@ impl ComputeDevice {
         match self {
             Self::NvidiaDiscrete => "nvidia-discrete",
             Self::AmdGpu => "amd-gpu",
+            Self::VulkanForced => "vulkan-forced",
             Self::Cpu => "cpu",
         }
     }
@@ -40,18 +45,33 @@ impl ComputeDevice {
 /// Detect the best compute device. Cheap sysfs/process checks only —
 /// no GPU context is created here.
 pub fn detect() -> ComputeDevice {
-    match std::env::var("FLOURE_COMPUTE")
-        .map(|v| v.to_ascii_lowercase())
-        .as_deref()
-    {
-        Ok("cpu") => {
-            eprintln!("[compute] FLOURE_COMPUTE=cpu -> forcing CPU path");
-            return ComputeDevice::Cpu;
+    // GPU builds exist on Linux only; elsewhere the CPU path is the only
+    // honest answer (llama.cpp silently keeps layers on CPU there).
+    if !cfg!(target_os = "linux") {
+        eprintln!("[compute] GPU offload is currently Linux-only -> CPU path");
+        return ComputeDevice::Cpu;
+    }
+    if let Ok(v) = std::env::var("FLOURE_COMPUTE").map(|v| v.to_ascii_lowercase()) {
+        match v.as_str() {
+            "cpu" => {
+                eprintln!("[compute] FLOURE_COMPUTE=cpu -> forcing CPU path");
+                return ComputeDevice::Cpu;
+            }
+            "vulkan" | "gpu" => {
+                // Honor the override unconditionally: probe only to pick
+                // WHICH GPU, and force offload even if probing finds none
+                // (load failure falls back to no-LLM, never silent CPU).
+                if has_nvidia_gpu() {
+                    return ComputeDevice::NvidiaDiscrete;
+                }
+                if has_amd_gpu() {
+                    return ComputeDevice::AmdGpu;
+                }
+                eprintln!("[compute] FLOURE_COMPUTE forces GPU offload (no GPU detected)");
+                return ComputeDevice::VulkanForced;
+            }
+            _ => {}
         }
-        Ok("vulkan") | Ok("gpu") => {
-            eprintln!("[compute] FLOURE_COMPUTE forces GPU offload");
-        }
-        _ => {}
     }
 
     if has_nvidia_gpu() {
@@ -78,11 +98,8 @@ pub fn main_gpu() -> i32 {
 fn has_nvidia_gpu() -> bool {
     let dev_nodes = std::fs::read_dir("/dev")
         .map(|rd| {
-            rd.filter_map(|e| e.ok()).any(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("nvidia")
-            })
+            rd.filter_map(|e| e.ok())
+                .any(|e| e.file_name().to_string_lossy().starts_with("nvidia"))
         })
         .unwrap_or(false);
     let smi = std::process::Command::new("nvidia-smi")
@@ -90,7 +107,10 @@ fn has_nvidia_gpu() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-    eprintln!("[compute] nvidia probe: dev_nodes={} nvidia_smi={}", dev_nodes, smi);
+    eprintln!(
+        "[compute] nvidia probe: dev_nodes={} nvidia_smi={}",
+        dev_nodes, smi
+    );
     dev_nodes || smi
 }
 
@@ -100,11 +120,8 @@ fn has_nvidia_gpu() -> bool {
 fn has_amd_gpu() -> bool {
     let render_node = std::fs::read_dir("/dev/dri")
         .map(|rd| {
-            rd.filter_map(|e| e.ok()).any(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("renderD")
-            })
+            rd.filter_map(|e| e.ok())
+                .any(|e| e.file_name().to_string_lossy().starts_with("renderD"))
         })
         .unwrap_or(false);
     let lspci_amd = std::process::Command::new("lspci")
@@ -133,9 +150,11 @@ mod tests {
         // predicates over the enum, so the preference is pinned here.
         assert!(ComputeDevice::NvidiaDiscrete.use_gpu());
         assert!(ComputeDevice::AmdGpu.use_gpu());
+        assert!(ComputeDevice::VulkanForced.use_gpu());
         assert!(!ComputeDevice::Cpu.use_gpu());
         assert_eq!(ComputeDevice::NvidiaDiscrete.as_str(), "nvidia-discrete");
         assert_eq!(ComputeDevice::AmdGpu.as_str(), "amd-gpu");
+        assert_eq!(ComputeDevice::VulkanForced.as_str(), "vulkan-forced");
         assert_eq!(ComputeDevice::Cpu.as_str(), "cpu");
     }
 

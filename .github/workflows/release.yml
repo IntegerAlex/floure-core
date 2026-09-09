@@ -94,7 +94,16 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libdbus-1-dev
+          sudo apt-get install -y libasound2-dev libdbus-1-dev libvulkan-dev
+          # glslc + SPIRV-Headers for the llama.cpp Vulkan backend
+          # (GPU offload is built on Linux only; Windows/macOS use CPU).
+          curl -fsSL https://sdk.lunarg.com/sdk/download/1.4.321.0/linux/vulkan-sdk.tar.xz -o /tmp/vulkan-sdk.tar.xz
+          mkdir -p /tmp/vulkan-sdk && tar -xf /tmp/vulkan-sdk.tar.xz -C /tmp/vulkan-sdk
+          echo "$(dirname $(find /tmp/vulkan-sdk -name glslc -type f | head -1))" >> $GITHUB_PATH
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/SPIRV-Headers
+          cmake -S /tmp/SPIRV-Headers -B /tmp/SPIRV-Headers/build -DCMAKE_INSTALL_PREFIX=/usr/local
+          sudo cmake --build /tmp/SPIRV-Headers/build --target install
+          echo "CPLUS_INCLUDE_PATH=/usr/local/include" >> $GITHUB_ENV
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0

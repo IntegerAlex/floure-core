@@ -73,7 +73,12 @@ impl WhisperRecognizer {
             return Ok(());
         }
         let model_dir = self.model_dir.clone();
-        let recognizer = build_recognizer(&model_dir, self.num_threads, self.debug, new_language.clone())?;
+        let recognizer = build_recognizer(
+            &model_dir,
+            self.num_threads,
+            self.debug,
+            new_language.clone(),
+        )?;
         self.recognizer = recognizer;
         self.language = new_language;
         Ok(())

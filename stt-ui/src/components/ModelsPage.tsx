@@ -153,6 +153,7 @@ export default function ModelsPage() {
   const llmModels = models.filter((m) => m.section === "llm");
 
   const downloadedCount = models.filter((m) => m.downloaded).length;
+  const downloadedAsrCount = asrModels.filter((m) => m.downloaded).length;
   const totalCount = models.length;
   const totalSize = models.filter((m) => m.downloaded).reduce((s, m) => s + m.sizeBytes, 0);
 
@@ -240,11 +241,11 @@ export default function ModelsPage() {
       )}
 
       {/* No models warning */}
-      {downloadedCount === 0 && !loading && (
+      {downloadedAsrCount === 0 && !loading && (
         <div className="flex items-center gap-3 mb-5 rounded-card bg-yellow-500/10 border border-yellow-500/25 px-4 py-3">
           <AlertCircle size={16} className="text-yellow-700 shrink-0" />
           <span className="text-[13px] text-yellow-700">
-            No models downloaded yet. Download at least one model to start using speech-to-text.
+            No speech-recognition models downloaded yet. Download at least one model to start using speech-to-text.
           </span>
         </div>
       )}

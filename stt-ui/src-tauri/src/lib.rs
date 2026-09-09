@@ -120,8 +120,8 @@ async fn delete_history_entry(id: i64) -> Result<bool, AppError> {
     let db_path = history_db_path()?;
     let ok = tauri::async_runtime::spawn_blocking(move || {
         let conn = Connection::open(db_path)?;
-        conn.execute("DELETE FROM transcripts WHERE id = ?1", [id])?;
-        Ok::<bool, AppError>(true)
+        let deleted = conn.execute("DELETE FROM transcripts WHERE id = ?1", [id])?;
+        Ok::<bool, AppError>(deleted > 0)
     })
     .await??;
     Ok(ok)
@@ -130,17 +130,14 @@ async fn delete_history_entry(id: i64) -> Result<bool, AppError> {
 #[tauri::command]
 async fn toggle_history_favorite(id: i64) -> Result<i64, AppError> {
     let db_path = history_db_path()?;
+    // Single statement so concurrent toggles can't both read the same
+    // value and lose an update.
     let new_val = tauri::async_runtime::spawn_blocking(move || {
         let conn = Connection::open(db_path)?;
-        let current: i64 = conn.query_row(
-            "SELECT favorite FROM transcripts WHERE id = ?1",
+        let new_val: i64 = conn.query_row(
+            "UPDATE transcripts SET favorite = 1 - favorite WHERE id = ?1 RETURNING favorite",
             [id],
             |row| row.get(0),
-        )?;
-        let new_val = if current != 0 { 0 } else { 1 };
-        conn.execute(
-            "UPDATE transcripts SET favorite = ?1 WHERE id = ?2",
-            rusqlite::params![new_val, id],
         )?;
         Ok::<i64, AppError>(new_val)
     })
@@ -418,19 +415,16 @@ async fn delete_dictionary_entry(id: i64) -> Result<bool, AppError> {
 #[tauri::command]
 async fn toggle_dictionary_favorite(id: i64) -> Result<Option<bool>, AppError> {
     let db_path = history_db_path()?;
+    // Single statement so concurrent toggles can't both read the same
+    // value and lose an update.
     let result = tauri::async_runtime::spawn_blocking(move || {
         let conn = Connection::open(db_path)?;
         ensure_dict_table(&conn)?;
 
-        let current: i64 = conn.query_row(
-            "SELECT is_favorite FROM dictionary_entries WHERE id = ?1",
+        let new_val: i64 = conn.query_row(
+            "UPDATE dictionary_entries SET is_favorite = 1 - is_favorite, updated_at = CURRENT_TIMESTAMP WHERE id = ?1 RETURNING is_favorite",
             [id],
             |row| row.get(0),
-        )?;
-        let new_val = if current != 0 { 0 } else { 1 };
-        conn.execute(
-            "UPDATE dictionary_entries SET is_favorite = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            rusqlite::params![new_val, id],
         )?;
         Ok::<Option<bool>, AppError>(Some(new_val != 0))
     })

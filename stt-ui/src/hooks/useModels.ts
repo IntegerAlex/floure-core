@@ -176,9 +176,12 @@ export function useModels() {
 
   // Cleanup polling on unmount
   useEffect(() => {
+    // Capture the live map: intervals added later are visible through it,
+    // and the linter is satisfied by not touching .current in cleanup.
+    const timers = pollingRef.current;
     return () => {
-      pollingRef.current.forEach((timer) => clearInterval(timer));
-      pollingRef.current.clear();
+      timers.forEach((timer) => clearInterval(timer));
+      timers.clear();
     };
   }, []);
 

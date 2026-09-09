@@ -95,7 +95,7 @@ impl ModelManager {
 
         for model in MODEL_MANIFEST {
             let model_dir = self.model_dir.join(model.id);
-            let downloaded = self.verify(&model.id);
+            let downloaded = self.verify(model.id);
             let (downloaded_flag, size_bytes) = if model_dir.exists() {
                 let total = walk_dir_size(&model_dir).unwrap_or(0);
                 (true, total)
@@ -126,11 +126,11 @@ impl ModelManager {
         }
     }
 
-    pub async fn download(&self, id: &str, mut progress: impl FnMut(usize, u64)) -> Result<()> {
+    pub async fn download(&self, id: &str, progress: impl FnMut(usize, u64)) -> Result<()> {
         let model_opt = find_model(id);
         if let Some(model) = model_opt {
             let target_dir = self.model_dir.join(model.id);
-            download_model(model, &target_dir, |p, b| progress(p, b)).await
+            download_model(model, &target_dir, progress).await
         } else {
             Err(anyhow::anyhow!("Model not found: {}", id))
         }
@@ -390,7 +390,8 @@ pub async fn download_model(
             // check on a correct file).
             let is_partial = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
             let effective_offset = if is_partial { resume_offset } else { 0 };
-            let content_len = response.content_length()
+            let content_len = response
+                .content_length()
                 .unwrap_or(expected_total.saturating_sub(effective_offset));
             let total = effective_offset + content_len;
             if resume_offset > 0 && !is_partial {

@@ -108,6 +108,14 @@ After transcription, an LLM cleans up the raw text — fixes punctuation, capita
 
 DeepSeek takes priority if both keys are set. OpenRouter supports a fallback model chain — if the primary fails, it tries the fallback automatically.
 
+### Local GPU offload
+
+The Rust-native backend prefers GPUs automatically: discrete NVIDIA → AMD → CPU (`stt-ui/src-tauri/src/compute.rs`). The local LLM offloads all layers via the llama.cpp Vulkan backend; ASR stays on CPU (int8 + AVX-512/VNNI is already sub-second per utterance). Overrides: `FLOURE_COMPUTE=cpu|vulkan`, `FLOURE_MAIN_GPU=<index>`.
+
+GPU build prerequisites (Linux only; Windows/macOS build CPU inference):
+- Vulkan loader + headers (`libvulkan-dev`), a GPU with a Vulkan ICD
+- `glslc` (shader compiler) and SPIRV-Headers — neither ships in apt; without sudo: symlink `glslc` from the Android NDK (or LunarG SDK) into `~/.local/bin`, clone + install SPIRV-Headers to `~/.local`, and export `CPLUS_INCLUDE_PATH=$HOME/.local/include` (or set it in `$CARGO_HOME/config.toml`). CI provisions the same pieces — see `.github/workflows/ci.yml`.
+
 ---
 
 ## Adaptive VAD

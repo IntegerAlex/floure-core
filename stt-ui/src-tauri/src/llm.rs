@@ -2,20 +2,14 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LlmMode {
     Off,
+    #[default]
     Cleanup,
     BulletList,
     Email,
     CommitMessage,
-}
-
-impl Default for LlmMode {
-    fn default() -> Self {
-        // Matches the pipeline's historical behavior (always Cleanup).
-        Self::Cleanup
-    }
 }
 
 impl LlmMode {
@@ -134,9 +128,13 @@ impl LlmCleanup {
                     if compute.use_gpu() {
                         let gpu = crate::compute::main_gpu();
                         eprintln!("[llm] offloading layers to GPU (main_gpu={})", gpu);
-                        model_params = model_params
-                            .with_n_gpu_layers(999)
-                            .with_main_gpu(gpu);
+                        model_params = model_params.with_n_gpu_layers(999).with_main_gpu(gpu);
+                    } else {
+                        // The wrapper default is n_gpu_layers=-1 (all
+                        // layers); pin to 0 so FLOURE_COMPUTE=cpu (or a
+                        // GPU-less host) can never silently offload.
+                        eprintln!("[llm] CPU path: keeping all layers on CPU");
+                        model_params = model_params.with_n_gpu_layers(0);
                     }
                     let model = LlamaModel::load_from_file(
                         backend_handle.as_ref().unwrap(),
