@@ -1,4 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface AppError {
@@ -58,7 +59,7 @@ export default function ErrorSidePanel({ errors, onDismiss, onRetry, visible, on
           onClick={onClose}
           aria-label="Hide error panel"
         >
-          ✕ Hide
+          <X size={14} /> Hide
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
@@ -78,18 +79,18 @@ export default function ErrorSidePanel({ errors, onDismiss, onRetry, visible, on
               >
                 <div className="flex items-start gap-3 px-3 py-2.5">
                   <span className={cn("mt-0.5 h-2 w-2 rounded-full shrink-0", CATEGORY_DOT[err.category] || "bg-red-500")} aria-hidden="true" />
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted px-1.5 py-0.5 rounded bg-app-surface border border-border" aria-hidden="true">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted px-1.5 py-0.5 rounded bg-app-surface border border-border" aria-hidden="true">
                     {CATEGORY_LABELS[err.category] || "error"}
                   </span>
                   <span className="flex-1 text-body text-text-primary">
                     {err.message}
                   </span>
                   <button
-                    className="text-text-muted hover:text-text-primary text-lg leading-none shrink-0 transition-colors"
+                    className="text-text-muted hover:text-text-primary shrink-0 transition-colors flex items-center"
                     onClick={() => onDismiss(err.id)}
                     aria-label={`Dismiss error: ${err.message}`}
                   >
-                    ×
+                    <X size={15} />
                   </button>
                 </div>
                 {err.retryHint && (

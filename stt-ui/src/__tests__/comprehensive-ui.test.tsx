@@ -737,7 +737,7 @@ describe("SettingsPanel", () => {
       <SettingsPanel settings={defaultSettings} onSave={() => {}} visible={true} onClose={() => {}} />
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText("⚙ Settings")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
   });
 
   it("closes on Escape key", async () => {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { Settings, X, Bot, KeyRound, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { RuntimeSettings } from "../App";
 
@@ -64,7 +65,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
     >
       <div className="bg-app-surface rounded-card border border-border w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden shadow-lg">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 className="text-heading text-text-primary">⚙ Settings</h2>
+          <h2 className="text-heading text-text-primary flex items-center gap-2"><Settings size={18} className="text-text-secondary" />Settings</h2>
           <button
             className={cn(
               "inline-flex items-center justify-center rounded-button h-8 px-3 text-small font-medium transition-all duration-200",
@@ -74,12 +75,12 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
             onClick={onClose}
             aria-label="Close settings"
           >
-            ✕ Close
+            <X size={14} /> Close
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-6">
           <div className="flex flex-col gap-3">
-            <h3 className="text-subheading text-text-primary">🤖 LLM Provider</h3>
+            <h3 className="text-subheading text-text-primary flex items-center gap-2"><Bot size={15} className="text-text-secondary" />LLM Provider</h3>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="settings-provider" className="text-label text-text-secondary">Provider</label>
               <select
@@ -134,7 +135,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
 
           {local.llmProvider !== "local" && (
             <div className="flex flex-col gap-3">
-              <h3 className="text-subheading text-text-primary">🔑 API Keys</h3>
+              <h3 className="text-subheading text-text-primary flex items-center gap-2"><KeyRound size={15} className="text-text-secondary" />API Keys</h3>
               <p className="text-small text-text-muted">Keys are passed directly to the engine process and never stored.</p>
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="settings-deepseek-key" className="text-label text-text-secondary">DeepSeek API Key</label>
@@ -177,7 +178,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
           )}
 
           <div className="flex flex-col gap-3">
-            <h3 className="text-subheading text-text-primary">🎤 Speech Recognition</h3>
+            <h3 className="text-subheading text-text-primary flex items-center gap-2"><Mic size={15} className="text-text-secondary" />Speech Recognition</h3>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="settings-hotkey" className="text-label text-text-secondary">Push-to-Talk Hotkey</label>
               <select

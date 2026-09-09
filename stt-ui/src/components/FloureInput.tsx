@@ -13,7 +13,7 @@ export const FloureInput = forwardRef<HTMLInputElement, FloureInputProps>(
         className={cn(
           "h-[30px] px-2.5 rounded-[8px] bg-app-surface-secondary",
           "border border-border text-[12px] text-text-primary",
-          "placeholder:text-text-disabled",
+          "placeholder:text-text-muted",
           "focus:outline-none focus:border-accent focus:bg-accent-focus-surface",
           "transition-colors duration-150",
           maxWidth,

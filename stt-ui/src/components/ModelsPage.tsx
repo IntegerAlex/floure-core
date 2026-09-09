@@ -32,7 +32,7 @@ function ModelCard({
         <div className="flex items-center gap-2">
           <strong className="text-[15px] text-text-primary">{model.name}</strong>
           {info.recommended && (
-            <span className="inline-flex items-center rounded-badge px-2 py-0.5 text-[11px] font-semibold bg-accent-muted border border-accent-muted-border text-accent-light">
+            <span className="inline-flex items-center rounded-badge px-2 py-0.5 text-[11px] font-semibold bg-accent-muted border border-accent-muted-border text-accent-active">
               Recommended
             </span>
           )}
@@ -41,7 +41,7 @@ function ModelCard({
           className={cn(
             "inline-flex items-center rounded-badge px-2.5 py-0.5 text-[12px] font-semibold",
             model.backend === "faster_whisper"
-              ? "bg-accent-muted border border-accent-muted-border text-accent-light"
+              ? "bg-accent-muted border border-accent-muted-border text-accent-active"
               : "bg-app-surface border border-border text-text-secondary",
           )}
         >
@@ -77,7 +77,7 @@ function ModelCard({
 
       {/* Error */}
       {model.error && (
-        <div className="flex items-center gap-2 text-[12px] text-red-400">
+        <div className="flex items-center gap-2 text-[12px] text-red-600">
           <AlertCircle size={14} />
           {model.error}
         </div>
@@ -109,7 +109,7 @@ function ModelCard({
             confirmDelete ? (
               <>
                 <button
-                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-button text-[12px] font-medium bg-red-900/30 border border-red-500/30 text-red-400 hover:bg-red-900/50 transition-colors"
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-button text-[12px] font-medium bg-red-500/10 border border-red-500/20 text-red-600 hover:bg-red-500/20 transition-colors"
                   onClick={() => { onDelete(); setConfirmDelete(false); }}
                 >
                   Confirm Delete
@@ -233,23 +233,17 @@ export default function ModelsPage() {
 
       {/* Error banner */}
       {globalError && (
-        <div className="flex items-center gap-3 mb-5 rounded-card bg-red-900/20 border border-red-500/30 px-4 py-3">
-          <AlertCircle size={16} className="text-red-400 shrink-0" />
-          <span className="text-[13px] text-red-400">{globalError}</span>
-          <button
-            className="ml-auto text-red-400 hover:text-red-300 text-lg leading-none transition-colors"
-            onClick={() => {}}
-          >
-            ×
-          </button>
+        <div className="flex items-center gap-3 mb-5 rounded-card bg-red-500/10 border border-red-500/20 px-4 py-3">
+          <AlertCircle size={16} className="text-red-600 shrink-0" />
+          <span className="text-[13px] text-red-600">{globalError}</span>
         </div>
       )}
 
       {/* No models warning */}
       {downloadedCount === 0 && !loading && (
-        <div className="flex items-center gap-3 mb-5 rounded-card bg-yellow-900/20 border border-yellow-500/30 px-4 py-3">
-          <AlertCircle size={16} className="text-yellow-400 shrink-0" />
-          <span className="text-[13px] text-yellow-400">
+        <div className="flex items-center gap-3 mb-5 rounded-card bg-yellow-500/10 border border-yellow-500/25 px-4 py-3">
+          <AlertCircle size={16} className="text-yellow-700 shrink-0" />
+          <span className="text-[13px] text-yellow-700">
             No models downloaded yet. Download at least one model to start using speech-to-text.
           </span>
         </div>

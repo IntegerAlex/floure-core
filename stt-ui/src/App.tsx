@@ -505,8 +505,9 @@ function ConfigView({
 
           {/* Connection */}
           <ConfigSection icon={PlugZap} title="Connection" subtitle="How Floure connects to the engine">
-            <SettingRow label="Mode">
+            <SettingRow label="Mode" htmlFor="cfg-mode">
               <FloureSelect
+                id="cfg-mode"
                 value={mode}
                 onChange={(e) => setMode(e.target.value as RunMode)}
               >
@@ -515,8 +516,9 @@ function ConfigView({
               </FloureSelect>
             </SettingRow>
             {mode === "ws" && (
-              <SettingRow label="Port">
+              <SettingRow label="Port" htmlFor="cfg-port">
                 <FloureInput
+                  id="cfg-port"
                   type="number"
                   value={settings.wsPort}
                   onChange={(e) => setSettings((s) => ({ ...s, wsPort: Number(e.target.value) || 8765 }))}
@@ -528,8 +530,9 @@ function ConfigView({
 
           {/* LLM Provider */}
           <ConfigSection icon={Settings2} title="LLM Provider" subtitle="API keys and model selection for post-processing">
-            <SettingRow label="Provider">
+            <SettingRow label="Provider" htmlFor="cfg-llm-provider">
               <FloureSelect
+                id="cfg-llm-provider"
                 value={settings.llmProvider}
                 onChange={(e) => {
                   const provider = e.target.value as "local" | "deepseek" | "openrouter";
@@ -563,8 +566,9 @@ function ConfigView({
             </SettingRow>
 
             {settings.llmProvider === "local" ? (
-              <SettingRow label="Model">
+              <SettingRow label="Model" htmlFor="cfg-local-model">
                 <FloureSelect
+                  id="cfg-local-model"
                   value={settings.llmModel || "s1-mini-q4_k_m"}
                   onChange={(e) => {
                     const modelId = e.target.value;
@@ -594,16 +598,18 @@ function ConfigView({
               </SettingRow>
             ) : (
               <>
-                <SettingRow label="Model">
+                <SettingRow label="Model" htmlFor="cfg-llm-model">
                   <FloureInput
+                    id="cfg-llm-model"
                     value={settings.llmModel}
                     onChange={(e) => setSettings((s) => ({ ...s, llmModel: e.target.value }))}
                     placeholder={settings.llmProvider === "deepseek" ? "deepseek-chat" : "openai/gpt-4o-mini"}
                     maxWidth="max-w-[200px]"
                   />
                 </SettingRow>
-                <SettingRow label="Fallback">
+                <SettingRow label="Fallback" htmlFor="cfg-llm-fallback">
                   <FloureInput
+                    id="cfg-llm-fallback"
                     value={settings.llmFallback}
                     onChange={(e) => setSettings((s) => ({ ...s, llmFallback: e.target.value }))}
                     placeholder={settings.llmProvider === "openrouter" ? "anthropic/claude-3-5-haiku-latest" : ""}
@@ -617,8 +623,9 @@ function ConfigView({
               <>
                 <div className="h-px bg-border" />
 
-                <SettingRow label="DeepSeek Key">
+                <SettingRow label="DeepSeek Key" htmlFor="cfg-deepseek-key">
                   <FloureInput
+                    id="cfg-deepseek-key"
                     type="password"
                     value={settings.deepseekApiKey}
                     onChange={(e) => setSettings((s) => ({ ...s, deepseekApiKey: e.target.value }))}
@@ -627,8 +634,9 @@ function ConfigView({
                     className="font-mono text-[11px]"
                   />
                 </SettingRow>
-                <SettingRow label="OpenRouter Key">
+                <SettingRow label="OpenRouter Key" htmlFor="cfg-openrouter-key">
                   <FloureInput
+                    id="cfg-openrouter-key"
                     type="password"
                     value={settings.openrouterApiKey}
                     onChange={(e) => setSettings((s) => ({ ...s, openrouterApiKey: e.target.value }))}
@@ -643,8 +651,9 @@ function ConfigView({
 
           {/* Output */}
           <ConfigSection icon={Sparkles} title="Output" subtitle="How transcribed text is delivered">
-            <SettingRow label="LLM Mode">
+            <SettingRow label="LLM Mode" htmlFor="cfg-llm-mode">
               <FloureSelect
+                id="cfg-llm-mode"
                 value={settings.llmMode}
                 onChange={(e) => setSettings((s) => ({ ...s, llmMode: e.target.value as RuntimeSettings["llmMode"] }))}
               >
@@ -688,8 +697,9 @@ function ConfigView({
 
           {/* Speech Recognition */}
           <ConfigSection icon={Mic2} title="Speech Recognition" subtitle="ASR engine and model settings">
-            <SettingRow label="Profile">
+            <SettingRow label="Profile" htmlFor="cfg-asr-profile">
                <FloureSelect
+                id="cfg-asr-profile"
                 value={settings.asrProfile}
                 onChange={(e) => setSettings((s) => ({ ...s, asrProfile: e.target.value as RuntimeSettings["asrProfile"] }))}
               >
@@ -698,24 +708,27 @@ function ConfigView({
                 <option value="whisper-base">Whisper base (Lightweight)</option>
               </FloureSelect>
             </SettingRow>
-             <SettingRow label="Backend">
+             <SettingRow label="Backend" htmlFor="cfg-backend">
                <FloureSelect
+                 id="cfg-backend"
                  value={settings.backend}
                  onChange={(e) => setSettings((s) => ({ ...s, backend: e.target.value as RuntimeSettings["backend"] }))}
                >
                  <option value="sherpa_onnx">sherpa-onnx (Rust native)</option>
                </FloureSelect>
              </SettingRow>
-            <SettingRow label="Model">
+            <SettingRow label="Model" htmlFor="cfg-model">
               <FloureInput
+                id="cfg-model"
                 value={settings.model}
                 onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
                 placeholder="e.g. large-v3-turbo"
                 maxWidth="max-w-[180px]"
               />
             </SettingRow>
-            <SettingRow label="Language">
+            <SettingRow label="Language" htmlFor="cfg-language">
               <FloureSelect
+                id="cfg-language"
                 value={settings.language}
                 onChange={(e) => setSettings((s) => ({ ...s, language: e.target.value }))}
                 maxWidth="max-w-[140px]"
@@ -734,8 +747,9 @@ function ConfigView({
                 <option value="ru">Russian</option>
               </FloureSelect>
             </SettingRow>
-            <SettingRow label="Vocabulary">
+            <SettingRow label="Vocabulary" htmlFor="cfg-hotwords">
               <FloureInput
+                id="cfg-hotwords"
                 value={settings.hotwords}
                 onChange={(e) => setSettings((s) => ({ ...s, hotwords: e.target.value }))}
                 placeholder="Comma-separated"
@@ -812,11 +826,11 @@ function ConfigView({
                   <Terminal size={11} />
                   Generated Command
                 </span>
-                <span className="text-[10px] text-text-disabled">
+                <span className="text-[11px] text-text-muted">
                   {mode === "ws" ? "restart backend to apply" : "applies on next start"}
                 </span>
               </div>
-              <code className="block text-[11px] text-accent-light font-mono leading-relaxed break-all">
+              <code className="block text-[11px] text-accent-active font-mono leading-relaxed break-all">
                 {commandPreview}
               </code>
             </div>
@@ -1361,7 +1375,7 @@ function App() {
       </AppShell>
 
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-app-surface border border-border rounded-card text-[14px] text-text-primary shadow-lg animate-in fade-in slide-in-from-bottom-2">
+        <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-app-surface border border-border rounded-card text-[14px] text-text-primary shadow-lg animate-toast-in">
           {toast}
         </div>
       )}

@@ -59,7 +59,7 @@ export default function MicButton({ status, connected, onToggle }: MicButtonProp
       </button>
       {isIdle && (
         <span className="text-[11px] text-text-muted select-none">
-          Press <kbd className="px-1 py-0.5 bg-border border border-border-hover rounded text-[10px] font-mono">Space</kbd> to start
+          Press <kbd className="px-1 py-0.5 bg-border border border-border-hover rounded text-[11px] font-mono">Space</kbd> to start
         </span>
       )}
     </div>

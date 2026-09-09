@@ -93,11 +93,11 @@ function EntryCard({
           >
             {cat.label}
           </span>
-          <span className="text-text-disabled text-[12px]">
+          <span className="text-text-muted text-[12px]">
             Triggered {entry.use_count} times
           </span>
           {entry.notes && (
-            <span className="text-text-disabled text-[12px] truncate max-w-[200px]">
+            <span className="text-text-muted text-[12px] truncate max-w-[200px]">
               {entry.notes}
             </span>
           )}
@@ -105,16 +105,18 @@ function EntryCard({
       </div>
 
       {/* Right: actions */}
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         <button
           onClick={onToggleFavorite}
           className="w-8 h-8 flex items-center justify-center rounded-[8px] hover:bg-border-hover transition-colors"
           title={entry.is_favorite ? "Unpin" : "Pin to top"}
+          aria-label={entry.is_favorite ? "Unpin from top" : "Pin to top"}
+          aria-pressed={!!entry.is_favorite}
         >
           <Star
             className={cn(
               "w-4 h-4 transition-colors",
-              entry.is_favorite ? "fill-[#D4883A] text-sunset" : "text-text-disabled"
+              entry.is_favorite ? "fill-[#D4883A] text-sunset" : "text-text-muted"
             )}
           />
         </button>
@@ -122,15 +124,17 @@ function EntryCard({
           onClick={onEdit}
           className="w-8 h-8 flex items-center justify-center rounded-[8px] hover:bg-border-hover transition-colors"
           title="Edit"
+          aria-label={`Edit ${entry.phrase}`}
         >
-          <Pencil className="w-4 h-4 text-text-disabled" />
+          <Pencil className="w-4 h-4 text-text-muted" />
         </button>
         <button
           onClick={onDelete}
           className="w-8 h-8 flex items-center justify-center rounded-[8px] hover:bg-border-hover transition-colors"
           title="Delete"
+          aria-label={`Delete ${entry.phrase}`}
         >
-          <Trash2 className="w-4 h-4 text-text-disabled hover:text-[#E55353]" />
+          <Trash2 className="w-4 h-4 text-text-muted hover:text-red-600" />
         </button>
       </div>
     </div>
@@ -168,28 +172,30 @@ function EntryModal({
 
         <div className="px-6 space-y-4 pb-4">
           <div>
-            <label className="block text-text-secondary text-[12px] font-medium mb-1.5">
+            <label htmlFor="dict-phrase" className="block text-text-secondary text-[12px] font-medium mb-1.5">
               Phrase
             </label>
             <input
+              id="dict-phrase"
               type="text"
               value={phrase}
               onChange={(e) => setPhrase(e.target.value)}
               placeholder="e.g. CEO, Tauri, Snehaa"
-              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-disabled outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
+              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-muted outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
             />
           </div>
 
           <div>
-            <label className="block text-text-secondary text-[12px] font-medium mb-1.5">
+            <label htmlFor="dict-replacement" className="block text-text-secondary text-[12px] font-medium mb-1.5">
               Replacement
             </label>
             <input
+              id="dict-replacement"
               type="text"
               value={replacement}
               onChange={(e) => setReplacement(e.target.value)}
               placeholder="e.g. Chief Executive Officer"
-              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-disabled outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
+              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-muted outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
             />
           </div>
 
@@ -205,7 +211,7 @@ function EntryModal({
                   className={cn(
                     "px-3 py-1.5 rounded-[8px] text-[12px] font-medium transition-all duration-150",
                     category === opt.value
-                      ? "bg-accent-surface text-accent border border-[rgba(255,59,86,0.15)]"
+                      ? "bg-accent-surface text-accent-active border border-[rgba(255,59,86,0.15)]"
                       : "bg-app-surface-secondary text-text-muted border border-border hover:border-border-hover"
                   )}
                 >
@@ -216,15 +222,16 @@ function EntryModal({
           </div>
 
           <div>
-            <label className="block text-text-secondary text-[12px] font-medium mb-1.5">
-              Notes <span className="text-text-disabled">(optional)</span>
+            <label htmlFor="dict-notes" className="block text-text-secondary text-[12px] font-medium mb-1.5">
+              Notes <span className="text-text-muted">(optional)</span>
             </label>
             <input
+              id="dict-notes"
               type="text"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Context or usage notes"
-              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-disabled outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
+              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-muted outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
             />
           </div>
         </div>
@@ -557,20 +564,22 @@ export default function DictionaryPage() {
           <>
             {/* Search */}
             <div className="relative mb-4">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-disabled" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search dictionary..."
-                className="w-full h-10 pl-10 pr-10 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-disabled outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
+                aria-label="Search dictionary"
+                className="w-full h-10 pl-10 pr-10 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-muted outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
               />
               {search && (
                 <button
                   onClick={() => setSearch("")}
+                  aria-label="Clear search"
                   className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full hover:bg-border-hover transition-colors"
                 >
-                  <X className="w-3.5 h-3.5 text-text-disabled" />
+                  <X className="w-3.5 h-3.5 text-text-muted" />
                 </button>
               )}
             </div>

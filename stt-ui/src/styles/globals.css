@@ -1,6 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -108,6 +105,26 @@ body {
 }
 .animate-breathe { animation: breathe 4s ease-in-out infinite; }
 
+/* Toast entrance (replaces tailwindcss-animate classes) */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.animate-toast-in { animation: toast-in 200ms ease-out; }
+
+/* Reduced motion: still the essential state change, drop the flourish */
+@media (prefers-reduced-motion: reduce) {
+  .animate-mic-pulse,
+  .animate-breathe,
+  .animate-toast-in,
+  .animate-spin,
+  .animate-pulse,
+  .ptt-pulse,
+  .ptt-wave {
+    animation: none !important;
+  }
+}
+
 /* Force colors via CSS variables — bulletproof fallback */
 .bg-app-bg { background-color: var(--snow) !important; }
 .bg-app-surface { background-color: var(--glass-bg) !important; }
@@ -119,7 +136,7 @@ body {
 .bg-app-surface-dark { background-color: #EDE8E1 !important; }
 .text-text-primary { color: var(--ink) !important; }
 .text-text-secondary { color: #6B6560 !important; }
-.text-text-muted { color: #9C9690 !important; }
+.text-text-muted { color: #76716B !important; }
 .text-text-disabled { color: #C4BFB8 !important; }
 .border-border { border-color: rgba(44,37,32,0.08) !important; }
 .border-border-hover { border-color: rgba(44,37,32,0.14) !important; }

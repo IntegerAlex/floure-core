@@ -104,7 +104,7 @@ function StatusLabel({ status }: { status: WidgetStatus }) {
 
   return (
     <span className={`text-[11px] font-medium tracking-wide whitespace-nowrap transition-colors duration-300 ${
-      status === "error" ? "text-red-400/90" : "text-text-muted"
+      status === "error" ? "text-red-600/90" : "text-text-muted"
     }`}>
       {label}
     </span>
@@ -390,7 +390,7 @@ export default function WidgetView() {
         <div className="h-px bg-border-hover mx-2" />
         <button
           onClick={handleQuit}
-          className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text-secondary hover:text-red-400 hover:bg-red-500/[0.08] transition-colors focus:outline-none focus:bg-red-500/[0.08]"
+          className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text-secondary hover:text-red-600 hover:bg-red-500/[0.08] transition-colors focus:outline-none focus:bg-red-500/[0.08]"
         >
           <X size={14} />
           Hide Widget
