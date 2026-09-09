@@ -35,7 +35,7 @@ dirs-next = "2"
 thiserror = "2"
 sherpa-onnx = "1.13"
 cpal = "0.18"
-llama-cpp-4 = "0.6"
+llama-cpp-4 = { version = "0.6", features = ["vulkan"] }
 reqwest = { version = "0.12", features = ["json", "stream", "gzip", "blocking"] }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }

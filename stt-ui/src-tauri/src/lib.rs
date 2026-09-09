@@ -1,4 +1,5 @@
 mod audio;
+mod compute;
 mod config;
 mod llm;
 mod models;

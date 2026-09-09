@@ -125,11 +125,37 @@ impl LlmCleanup {
         let local_model = if backend == LlmBackend::Local {
             if let Some(path) = model_path {
                 if path.exists() {
+                    // GPU-first: offload all layers to the detected GPU via
+                    // the Vulkan backend (works on NVIDIA and AMD without a
+                    // CUDA toolkit). Falls back to CPU when no GPU is found.
+                    let compute = crate::compute::detect();
+                    eprintln!("[llm] compute device: {}", compute.as_str());
+                    let mut model_params = LlamaModelParams::default();
+                    if compute.use_gpu() {
+                        let gpu = crate::compute::main_gpu();
+                        eprintln!("[llm] offloading layers to GPU (main_gpu={})", gpu);
+                        model_params = model_params
+                            .with_n_gpu_layers(999)
+                            .with_main_gpu(gpu);
+                    }
                     let model = LlamaModel::load_from_file(
                         backend_handle.as_ref().unwrap(),
                         path,
-                        &LlamaModelParams::default(),
+                        &model_params,
                     )?;
+                    // Log every ggml device so load logs can confirm which
+                    // physical GPU received the layers.
+                    for dev in model.devices() {
+                        let (free, total) = dev.memory();
+                        eprintln!(
+                            "[llm] device: name={} type={:?} free={}MB total={}MB desc={}",
+                            dev.name().unwrap_or("?"),
+                            dev.device_type(),
+                            free / 1024 / 1024,
+                            total / 1024 / 1024,
+                            dev.description().unwrap_or("?"),
+                        );
+                    }
                     Some(model)
                 } else {
                     None
@@ -225,10 +251,15 @@ impl LlmCleanup {
         eprintln!("[llm] prompt tokens: {}", tokens.len());
 
         // Decode the full prompt — only the last token needs logits.
+        let prompt_t0 = std::time::Instant::now();
         for (i, &tok) in tokens.iter().enumerate() {
             batch.add(tok, i as i32, &[0], i == tokens.len() - 1)?;
         }
         ctx.decode(&mut batch)?;
+        eprintln!(
+            "[llm] prompt decoded in {}ms",
+            prompt_t0.elapsed().as_millis()
+        );
 
         // Sampler index is batch-relative (position within the last decoded
         // batch), NOT the absolute KV-cache position. The prompt batch holds
@@ -240,6 +271,7 @@ impl LlmCleanup {
         let eos_token = model.token_eos();
         let max_new_tokens = 128;
         let mut generated = 0;
+        let gen_t0 = std::time::Instant::now();
 
         loop {
             let token = sampler.sample(&ctx, idx);
@@ -263,7 +295,12 @@ impl LlmCleanup {
             idx = 0; // single-token batch: the token sits at batch index 0
         }
 
-        eprintln!("[llm] done, generated {} tokens", generated);
+        eprintln!(
+            "[llm] done, generated {} tokens in {}ms ({:.1} tok/s)",
+            generated,
+            gen_t0.elapsed().as_millis(),
+            generated as f64 / gen_t0.elapsed().as_secs_f64().max(1e-6),
+        );
         Ok(())
     }
 
