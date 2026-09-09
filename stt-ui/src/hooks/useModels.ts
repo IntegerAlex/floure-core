@@ -1,17 +1,19 @@
 // ── Model management hook: check status, download, track progress ──
 import { useState, useCallback, useEffect, useRef } from "react";
-import { MODEL_CATALOG } from "../store";
-import type { ASRBackend, ModelInfo } from "../store";
+import { MODEL_CATALOG, LLM_MODEL_CATALOG } from "../store";
+import type { ASRBackend, ModelInfo, LlmModelInfo } from "../store";
 
 export interface ModelStatusEntry {
   name: string;
-  backend: ASRBackend | "whisper_cpp" | "faster_whisper";
+  id: string;
+  backend: ASRBackend | "whisper_cpp" | "faster_whisper" | LlmModelInfo["backend"];
   downloaded: boolean;
   downloading: boolean;
   progress: number;
   error: string | null;
   sizeBytes: number;
   path: string;
+  section: "asr" | "llm";
 }
 
 interface RustModelStatus {
@@ -26,19 +28,36 @@ function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+function buildInitialModels(): ModelStatusEntry[] {
+  const asr = MODEL_CATALOG.map((m) => ({
+    name: m.name,
+    id: m.id,
+    backend: m.backend,
+    downloaded: false,
+    downloading: false,
+    progress: 0,
+    error: null,
+    sizeBytes: 0,
+    path: "",
+    section: "asr" as const,
+  }));
+  const llm = LLM_MODEL_CATALOG.map((m) => ({
+    name: m.name,
+    id: m.id,
+    backend: m.backend,
+    downloaded: false,
+    downloading: false,
+    progress: 0,
+    error: null,
+    sizeBytes: 0,
+    path: "",
+    section: "llm" as const,
+  }));
+  return [...asr, ...llm];
+}
+
 export function useModels() {
-  const [models, setModels] = useState<ModelStatusEntry[]>(() =>
-    MODEL_CATALOG.map((m) => ({
-      name: m.name,
-      backend: m.backend,
-      downloaded: false,
-      downloading: false,
-      progress: 0,
-      error: null,
-      sizeBytes: 0,
-      path: "",
-    }))
-  );
+  const [models, setModels] = useState<ModelStatusEntry[]>(buildInitialModels);
   const [loading, setLoading] = useState(true);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -54,7 +73,10 @@ export function useModels() {
 
       setModels((prev) =>
         prev.map((m) => {
-          const status = rustStatuses.find((s) => s.name === m.name);
+          // Match by name first, fall back to id (backend uses id for LLM models)
+          const status =
+            rustStatuses.find((s) => s.name === m.name) ??
+            rustStatuses.find((s) => s.id === m.id);
           if (status) {
             return {
               ...m,
@@ -83,7 +105,7 @@ export function useModels() {
       return;
     }
 
-    const entry = MODEL_CATALOG.find((m) => m.name === modelName);
+    const entry = models.find((m) => m.name === modelName);
     if (!entry) {
       setGlobalError(`Model "${modelName}" not found in catalog`);
       return;
@@ -102,12 +124,12 @@ export function useModels() {
       await invoke("download_model", { id: entry.id });
 
       // Poll check_model_status until the model appears downloaded.
-      // download_model is fire-and-forget; polling is the only way to
-      // know when it finishes.
       const poll = setInterval(async () => {
         try {
           const statuses = await invoke<RustModelStatus[]>("check_model_status");
-          const status = statuses.find((s) => s.id === entry.id);
+          const status =
+            statuses.find((s) => s.name === modelName) ??
+            statuses.find((s) => s.id === entry.id);
           if (status?.downloaded) {
             if (pollingRef.current) clearInterval(pollingRef.current);
             pollingRef.current = null;
@@ -135,7 +157,7 @@ export function useModels() {
         )
       );
     }
-  }, [refreshModels]);
+  }, [models, refreshModels]);
 
   const deleteModel = useCallback(async (modelName: string) => {
     if (!isTauri()) return;
@@ -171,6 +193,10 @@ export function useModels() {
 
 export function getModelInfo(modelName: string): ModelInfo | undefined {
   return MODEL_CATALOG.find((m) => m.name === modelName);
+}
+
+export function getLlmModelInfo(modelName: string): LlmModelInfo | undefined {
+  return LLM_MODEL_CATALOG.find((m) => m.name === modelName);
 }
 
 export function formatBytes(bytes: number): string {

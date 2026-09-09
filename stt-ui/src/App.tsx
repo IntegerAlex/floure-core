@@ -531,52 +531,114 @@ function ConfigView({
             <SettingRow label="Provider">
               <FloureSelect
                 value={settings.llmProvider}
-                onChange={(e) => setSettings((s) => ({ ...s, llmProvider: e.target.value as "deepseek" | "openrouter" }))}
+                onChange={(e) => {
+                  const provider = e.target.value as "local" | "deepseek" | "openrouter";
+                  setSettings((s) => ({ ...s, llmProvider: provider }));
+                  if (provider === "local") {
+                    // Sync the selected local model to Rust config
+                    void (async () => {
+                      const { invoke } = await import("@tauri-apps/api/core");
+                      await invoke("set_floure_config", {
+                        config: {
+                          asr_profile: settings.asrProfile === "auto" ? "Parakeet" : settings.asrProfile === "parakeet" ? "Parakeet" : settings.asrProfile === "whisper-turbo" ? "WhisperTurbo" : "WhisperBase",
+                          language: settings.language || "en",
+                          llm_provider: "Local",
+                          llm_mode: settings.llmMode === "off" ? "Off" : settings.llmMode === "cleanup" ? "Cleanup" : settings.llmMode === "bullet_list" ? "BulletList" : settings.llmMode === "email" ? "Email" : "CommitMessage",
+                          llm_model: settings.llmModel || "s1-mini-q4_k_m",
+                          typing_enabled: settings.typing,
+                          clipboard_enabled: settings.clipboard,
+                          dictation_mode: false,
+                          hotkey: "ctrl+shift+s",
+                        },
+                      });
+                    })();
+                  }
+                }}
                 maxWidth="max-w-[120px]"
               >
-                <option value="openrouter">OpenRouter</option>
+                <option value="local">Local</option>
                 <option value="deepseek">DeepSeek</option>
+                <option value="openrouter">OpenRouter</option>
               </FloureSelect>
             </SettingRow>
-            <SettingRow label="Model">
-              <FloureInput
-                value={settings.llmModel}
-                onChange={(e) => setSettings((s) => ({ ...s, llmModel: e.target.value }))}
-                placeholder={settings.llmProvider === "deepseek" ? "deepseek-chat" : "openai/gpt-4o-mini"}
-                maxWidth="max-w-[200px]"
-              />
-            </SettingRow>
-            <SettingRow label="Fallback">
-              <FloureInput
-                value={settings.llmFallback}
-                onChange={(e) => setSettings((s) => ({ ...s, llmFallback: e.target.value }))}
-                placeholder={settings.llmProvider === "openrouter" ? "anthropic/claude-3-5-haiku-latest" : ""}
-                maxWidth="max-w-[200px]"
-              />
-            </SettingRow>
 
-            <div className="h-px bg-border" />
+            {settings.llmProvider === "local" ? (
+              <SettingRow label="Model">
+                <FloureSelect
+                  value={settings.llmModel || "s1-mini-q4_k_m"}
+                  onChange={(e) => {
+                    const modelId = e.target.value;
+                    setSettings((s) => ({ ...s, llmModel: modelId }));
+                    void (async () => {
+                      const { invoke } = await import("@tauri-apps/api/core");
+                      await invoke("set_floure_config", {
+                        config: {
+                          asr_profile: settings.asrProfile === "auto" ? "Parakeet" : settings.asrProfile === "parakeet" ? "Parakeet" : settings.asrProfile === "whisper-turbo" ? "WhisperTurbo" : "WhisperBase",
+                          language: settings.language || "en",
+                          llm_provider: "Local",
+                          llm_mode: settings.llmMode === "off" ? "Off" : settings.llmMode === "cleanup" ? "Cleanup" : settings.llmMode === "bullet_list" ? "BulletList" : settings.llmMode === "email" ? "Email" : "CommitMessage",
+                          llm_model: modelId,
+                          typing_enabled: settings.typing,
+                          clipboard_enabled: settings.clipboard,
+                          dictation_mode: false,
+                          hotkey: "ctrl+shift+s",
+                        },
+                      });
+                    })();
+                  }}
+                  maxWidth="max-w-[200px]"
+                >
+                  <option value="s1-mini-q4_k_m">S1-Mini (462 MB)</option>
+                  <option value="gemma-3-1b-it-q4_k_m">Gemma 3 1B (806 MB)</option>
+                </FloureSelect>
+              </SettingRow>
+            ) : (
+              <>
+                <SettingRow label="Model">
+                  <FloureInput
+                    value={settings.llmModel}
+                    onChange={(e) => setSettings((s) => ({ ...s, llmModel: e.target.value }))}
+                    placeholder={settings.llmProvider === "deepseek" ? "deepseek-chat" : "openai/gpt-4o-mini"}
+                    maxWidth="max-w-[200px]"
+                  />
+                </SettingRow>
+                <SettingRow label="Fallback">
+                  <FloureInput
+                    value={settings.llmFallback}
+                    onChange={(e) => setSettings((s) => ({ ...s, llmFallback: e.target.value }))}
+                    placeholder={settings.llmProvider === "openrouter" ? "anthropic/claude-3-5-haiku-latest" : ""}
+                    maxWidth="max-w-[200px]"
+                  />
+                </SettingRow>
+              </>
+            )}
 
-            <SettingRow label="DeepSeek Key">
-              <FloureInput
-                type="password"
-                value={settings.deepseekApiKey}
-                onChange={(e) => setSettings((s) => ({ ...s, deepseekApiKey: e.target.value }))}
-                placeholder="sk-..."
-                maxWidth="max-w-[200px]"
-                className="font-mono text-[11px]"
-              />
-            </SettingRow>
-            <SettingRow label="OpenRouter Key">
-              <FloureInput
-                type="password"
-                value={settings.openrouterApiKey}
-                onChange={(e) => setSettings((s) => ({ ...s, openrouterApiKey: e.target.value }))}
-                placeholder="sk-or-..."
-                maxWidth="max-w-[200px]"
-                className="font-mono text-[11px]"
-              />
-            </SettingRow>
+            {settings.llmProvider !== "local" && (
+              <>
+                <div className="h-px bg-border" />
+
+                <SettingRow label="DeepSeek Key">
+                  <FloureInput
+                    type="password"
+                    value={settings.deepseekApiKey}
+                    onChange={(e) => setSettings((s) => ({ ...s, deepseekApiKey: e.target.value }))}
+                    placeholder="sk-..."
+                    maxWidth="max-w-[200px]"
+                    className="font-mono text-[11px]"
+                  />
+                </SettingRow>
+                <SettingRow label="OpenRouter Key">
+                  <FloureInput
+                    type="password"
+                    value={settings.openrouterApiKey}
+                    onChange={(e) => setSettings((s) => ({ ...s, openrouterApiKey: e.target.value }))}
+                    placeholder="sk-or-..."
+                    maxWidth="max-w-[200px]"
+                    className="font-mono text-[11px]"
+                  />
+                </SettingRow>
+              </>
+            )}
           </ConfigSection>
 
           {/* Output */}

@@ -98,8 +98,9 @@ def benchmark_dictionary_accuracy():
     store = None
     try:
         # Create a temporary store to avoid polluting main DB
-        tmp = tempfile.mktemp(suffix='.db')
-        store = get_store(tmp)
+        tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        tmp.close()
+        store = get_store(tmp.name)
 
         # Add test dictionary entries
         test_entries = [
@@ -153,7 +154,7 @@ def benchmark_dictionary_accuracy():
         # Clean up temp DB
         for suffix in ['', '-wal', '-shm']:
             try:
-                os.unlink(tmp + suffix)
+                os.unlink(tmp.name + suffix)
             except Exception:
                 pass
 

@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { useModels, formatBytes, getModelInfo } from "../hooks/useModels";
-import { MODEL_CATALOG } from "../store";
+import { useModels, formatBytes, getModelInfo, getLlmModelInfo } from "../hooks/useModels";
 import { RefreshCw, Download, Trash2, Check, AlertCircle, Loader2 } from "lucide-react";
 
 function ModelCard({
@@ -11,7 +10,7 @@ function ModelCard({
   onDelete,
 }: {
   model: { name: string; backend: string; downloaded: boolean; downloading: boolean; progress: number; error: string | null; sizeBytes: number };
-  info: (typeof MODEL_CATALOG)[number];
+  info: { recommended: boolean; size: string; bestFor: string; speed?: string; accuracy?: string };
   onDownload: () => void;
   onDelete: () => void;
 }) {
@@ -53,8 +52,8 @@ function ModelCard({
       {/* Info row */}
       <div className="flex items-center gap-4 text-[13px] text-text-muted">
         <span>{info.size}</span>
-        <span>{info.speed}</span>
-        <span>{info.accuracy}</span>
+        {info.speed && <span>{info.speed}</span>}
+        {info.accuracy && <span>{info.accuracy}</span>}
         {model.downloaded && model.sizeBytes > 0 && (
           <span className="text-green-400">{formatBytes(model.sizeBytes)}</span>
         )}
@@ -150,10 +149,20 @@ export default function ModelsPage() {
   const { models, loading, globalError, refreshModels, downloadModel, deleteModel } = useModels();
   const [filter, setFilter] = useState<"all" | "downloaded" | "available">("all");
 
+  const asrModels = models.filter((m) => m.section === "asr");
+  const llmModels = models.filter((m) => m.section === "llm");
+
   const downloadedCount = models.filter((m) => m.downloaded).length;
+  const totalCount = models.length;
   const totalSize = models.filter((m) => m.downloaded).reduce((s, m) => s + m.sizeBytes, 0);
 
-  const filteredModels = models.filter((m) => {
+  const filteredAsr = asrModels.filter((m) => {
+    if (filter === "downloaded") return m.downloaded;
+    if (filter === "available") return !m.downloaded;
+    return true;
+  });
+
+  const filteredLlm = llmModels.filter((m) => {
     if (filter === "downloaded") return m.downloaded;
     if (filter === "available") return !m.downloaded;
     return true;
@@ -184,7 +193,7 @@ export default function ModelsPage() {
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-green-400" />
           <span className="text-[13px] text-text-secondary">
-            <strong className="text-text-primary">{downloadedCount}</strong> of {MODEL_CATALOG.length} downloaded
+            <strong className="text-text-primary">{downloadedCount}</strong> of {totalCount} downloaded
           </span>
         </div>
         <div className="h-4 w-px bg-border-hover" />
@@ -256,25 +265,55 @@ export default function ModelsPage() {
 
       {/* Model grid */}
       {!loading && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {filteredModels.map((model) => {
-            const info = getModelInfo(model.name);
-            if (!info) return null;
-            return (
-              <ModelCard
-                key={model.name}
-                model={model}
-                info={info}
-                onDownload={() => void downloadModel(model.name)}
-                onDelete={() => void deleteModel(model.name)}
-              />
-            );
-          })}
+        <div className="flex flex-col gap-6">
+          {/* ASR Models */}
+          {filteredAsr.length > 0 && (
+            <div>
+              <h2 className="text-[14px] font-medium text-text-primary mb-3">Speech Recognition</h2>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {filteredAsr.map((model) => {
+                  const info = getModelInfo(model.name);
+                  if (!info) return null;
+                  return (
+                    <ModelCard
+                      key={model.name}
+                      model={model}
+                      info={info}
+                      onDownload={() => void downloadModel(model.name)}
+                      onDelete={() => void deleteModel(model.name)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* LLM Models */}
+          {filteredLlm.length > 0 && (
+            <div>
+              <h2 className="text-[14px] font-medium text-text-primary mb-3">Text Cleanup (LLM)</h2>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {filteredLlm.map((model) => {
+                  const info = getLlmModelInfo(model.name);
+                  if (!info) return null;
+                  return (
+                    <ModelCard
+                      key={model.name}
+                      model={model}
+                      info={info}
+                      onDownload={() => void downloadModel(model.name)}
+                      onDelete={() => void deleteModel(model.name)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* Empty state for filter */}
-      {!loading && filteredModels.length === 0 && (
+      {!loading && filteredAsr.length === 0 && filteredLlm.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-[14px] text-text-muted">
             {filter === "downloaded"

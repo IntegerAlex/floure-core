@@ -84,7 +84,7 @@ export const MODEL_CATALOG: ModelInfo[] = [
 export const LLM_MODEL_CATALOG: LlmModelInfo[] = [
   {
     id: "s1-mini-q4_k_m",
-    name: "S1-Mini (Q4_K_M)",
+    name: "S1-Mini Q4_K_M",
     size: "~462 MB",
     sizeBytes: 484_219_808,
     bestFor: "ASR transcript cleanup",

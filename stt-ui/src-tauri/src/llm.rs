@@ -211,13 +211,15 @@ impl LlmCleanup {
         let mut batch = LlamaBatch::new(512, 1);
 
         let tokens = model.str_to_token(prompt, AddBos::Always)?;
+
+        // Decode the full prompt — only the last token needs logits.
         for (i, &tok) in tokens.iter().enumerate() {
             batch.add(tok, i as i32, &[0], i == tokens.len() - 1)?;
         }
-
         ctx.decode(&mut batch)?;
 
-        let mut n_cur = tokens.len() as i32;
+        // Position of the last decoded prompt token — sampler reads logits here.
+        let mut n_cur = tokens.len() as i32 - 1;
         let sampler = LlamaSampler::greedy();
         let eos_token = model.token_eos();
         let max_tokens = 512;
@@ -229,13 +231,15 @@ impl LlmCleanup {
             let s = String::from_utf8_lossy(&piece).to_string();
             callback(s);
 
-            batch.add(token, n_cur, &[0], n_cur == tokens.len() as i32)?;
-            ctx.decode(&mut batch)?;
-            n_cur += 1;
-
-            if token == eos_token || n_cur >= max_tokens {
+            if token == eos_token || n_cur + 1 >= max_tokens {
                 break;
             }
+
+            // Advance position and decode one new token at a time.
+            n_cur += 1;
+            batch.clear();
+            batch.add(token, n_cur, &[0], true)?;
+            ctx.decode(&mut batch)?;
         }
 
         Ok(())
