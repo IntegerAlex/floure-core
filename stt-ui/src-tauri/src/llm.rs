@@ -210,7 +210,19 @@ impl LlmCleanup {
         let mut ctx = model.new_context(backend, ctx_params)?;
         let mut batch = LlamaBatch::new(512, 1);
 
-        let tokens = model.str_to_token(prompt, AddBos::Always)?;
+        // Wrap the cleanup instruction in the model's own chat template
+        // (Qwen3 `<|im_start|>` framing for S1-Mini, Gemma turns for Gemma).
+        // Without this the model doesn't know where its answer should end
+        // and rambles past EOS. `add_assistant=true` appends the assistant
+        // header so generation starts as the reply.
+        let chat = vec![LlamaChatMessage::new("user".to_string(), prompt.to_string())
+            .map_err(|e| anyhow::anyhow!("chat message: {}", e))?];
+        let formatted = model
+            .apply_chat_template(None, &chat, true)
+            .map_err(|e| anyhow::anyhow!("chat template: {}", e))?;
+
+        let tokens = model.str_to_token(&formatted, AddBos::Always)?;
+        eprintln!("[llm] prompt tokens: {}", tokens.len());
 
         // Decode the full prompt — only the last token needs logits.
         for (i, &tok) in tokens.iter().enumerate() {
@@ -218,30 +230,38 @@ impl LlmCleanup {
         }
         ctx.decode(&mut batch)?;
 
-        // Position of the last decoded prompt token — sampler reads logits here.
-        let mut n_cur = tokens.len() as i32 - 1;
+        // Sampler index is batch-relative (position within the last decoded
+        // batch), NOT the absolute KV-cache position. The prompt batch holds
+        // N tokens with logits on the last one; every follow-up batch holds
+        // a single token at batch index 0.
+        let mut idx = tokens.len() as i32 - 1;
+        let mut n_pos = tokens.len() as i32 - 1;
         let sampler = LlamaSampler::greedy();
         let eos_token = model.token_eos();
-        let max_tokens = 512;
+        let max_new_tokens = 128;
+        let mut generated = 0;
 
         loop {
-            let token = sampler.sample(&ctx, n_cur);
+            let token = sampler.sample(&ctx, idx);
 
             let piece = model.token_to_bytes(token, Special::Plaintext)?;
             let s = String::from_utf8_lossy(&piece).to_string();
             callback(s);
+            generated += 1;
 
-            if token == eos_token || n_cur + 1 >= max_tokens {
+            if token == eos_token || generated >= max_new_tokens {
                 break;
             }
 
-            // Advance position and decode one new token at a time.
-            n_cur += 1;
+            // Advance the KV position and decode one new token at a time.
+            n_pos += 1;
             batch.clear();
-            batch.add(token, n_cur, &[0], true)?;
+            batch.add(token, n_pos, &[0], true)?;
             ctx.decode(&mut batch)?;
+            idx = 0; // single-token batch: the token sits at batch index 0
         }
 
+        eprintln!("[llm] done, generated {} tokens", generated);
         Ok(())
     }
 
