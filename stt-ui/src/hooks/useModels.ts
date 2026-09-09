@@ -60,7 +60,7 @@ export function useModels() {
   const [models, setModels] = useState<ModelStatusEntry[]>(buildInitialModels);
   const [loading, setLoading] = useState(true);
   const [globalError, setGlobalError] = useState<string | null>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
 
   const refreshModels = useCallback(async () => {
     if (!isTauri()) {
@@ -131,8 +131,8 @@ export function useModels() {
             statuses.find((s) => s.name === modelName) ??
             statuses.find((s) => s.id === entry.id);
           if (status?.downloaded) {
-            if (pollingRef.current) clearInterval(pollingRef.current);
-            pollingRef.current = null;
+            clearInterval(poll);
+            pollingRef.current.delete(entry.id);
             setModels((prev) =>
               prev.map((m) =>
                 m.name === modelName
@@ -147,7 +147,7 @@ export function useModels() {
         }
       }, 2000);
 
-      pollingRef.current = poll;
+      pollingRef.current.set(entry.id, poll);
     } catch (err) {
       setModels((prev) =>
         prev.map((m) =>
@@ -177,7 +177,8 @@ export function useModels() {
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
+      pollingRef.current.forEach((timer) => clearInterval(timer));
+      pollingRef.current.clear();
     };
   }, []);
 

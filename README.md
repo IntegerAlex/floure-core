@@ -140,8 +140,6 @@ The Tauri v2 + React 19 desktop app provides:
 - **Widget mode** — compact always-on-top mini window
 - **Global shortcut** — Super+Space to toggle anywhere
 
-The Python engine runs as a Tauri sidecar. The UI communicates via JSON events over stdout.
-
 ---
 
 ## Architecture (current)
@@ -160,59 +158,10 @@ History lives in SQLite at `~/.local/share/floure/history.db`
 forward). Config lives at `~/.config/floure/config.json`.
 See [CONTEXT.md](CONTEXT.md) and [docs/adr/](docs/adr/).
 
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    PURE CORE                         │
-│                                                     │
-│  config (frozen dataclass)                          │
-│  types (frozen dataclass)                           │
-│  prompts (str → str, pure functions)                │
-│  vad (np.ndarray → bool, pure functions)            │
-├─────────────────────────────────────────────────────┤
-│                  EFFECTFUL SHELL                     │
-│                                                     │
-│  audio_capture (sounddevice → numpy)                │
-│  transcription (whisper.cpp / faster-whisper)       │
-│  llm (DeepSeek / OpenRouter / Ollama, streaming)    │
-│  clipboard (wl-copy / xclip subprocess)             │
-│  typing (wtype / xdotool subprocess)                │
-│  history (SQLite, thread-safe fire-and-forget)      │
-│  embeddings (sentence-transformers, lazy-loaded)    │
-├─────────────────────────────────────────────────────┤
-│                     WIRING                           │
-│                                                     │
-│  orchestrator (streaming loop, background threads)  │
-│  cli (argparse → AppConfig → run)                   │
-│  server (FastAPI + Socket.IO for browser mode)      │
-└─────────────────────────────────────────────────────┘
-```
-
-| Module | Role | Dependencies |
-|---|---|---|
-| `stt/config.py` | Immutable configuration | None |
-| `stt/types.py` | Immutable data types | None |
-| `stt/prompts.py` | LLM prompt templates | None |
-| `stt/vad.py` | Voice-activity detection | numpy |
-| `stt/audio_capture.py` | Microphone I/O | sounddevice, numpy |
-| `stt/transcription.py` | ASR backends | faster-whisper, pywhispercpp |
-| `stt/llm.py` | LLM clients | urllib (stdlib) |
-| `stt/clipboard.py` | Clipboard output | wl-copy / xclip (subprocess) |
-| `stt/typing.py` | Focused-input typing | wtype / xdotool (subprocess) |
-| `stt/history.py` | Transcript persistence | sqlite3 (stdlib) |
-| `stt/embeddings.py` | Few-shot context retrieval | sentence-transformers (optional) |
-| `stt/speaker.py` | Speaker verification | resemblyzer (optional) |
-| `stt/server.py` | Browser UI backend | FastAPI, Socket.IO |
-| `stt/orchestrator.py` | Main pipeline | All of the above |
-
----
 
 ## History & Few-Shot Learning
 
-Transcripts are saved to SQLite (`~/.local/share/stt/history.db`) with metadata: raw text, cleaned text, LLM mode, provider, model, and timestamp. FTS5 full-text search is indexed automatically via triggers.
+Transcripts are saved to SQLite (`~/.local/share/floure/history.db`) with metadata: raw text, cleaned text, LLM mode, provider, model, and timestamp. FTS5 full-text search is indexed automatically via triggers.
 
 If `sentence-transformers` is installed, the orchestrator retrieves past correction pairs (raw → cleaned) as few-shot examples for the LLM. The top-3 most similar transcripts are injected into the prompt, so the system learns your speech patterns over time.
 

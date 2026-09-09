@@ -54,7 +54,25 @@ impl LlmProcessor {
         if mode == LlmMode::Off {
             cleaned = text.to_string();
         } else if let Some(llm) = &mut self.llm {
-            let prompt = crate::llm::build_prompt(text, mode, "", "");
+            // The local context is 512 tokens with a 128-token completion
+            // budget, so clamp pathological transcripts (keep the tail =
+            // most recent speech) instead of failing opaquely in decode.
+            const MAX_TRANSCRIPT_BYTES: usize = 1200;
+            let transcript = if text.len() > MAX_TRANSCRIPT_BYTES {
+                eprintln!(
+                    "[pipeline] transcript truncated for LLM ({} -> {} bytes)",
+                    text.len(),
+                    MAX_TRANSCRIPT_BYTES
+                );
+                let mut start = text.len() - MAX_TRANSCRIPT_BYTES;
+                while !text.is_char_boundary(start) {
+                    start += 1;
+                }
+                &text[start..]
+            } else {
+                text
+            };
+            let prompt = crate::llm::build_prompt(transcript, mode, "", "");
             let _ = app.emit("llm_start", serde_json::json!({}));
 
             let collected = Arc::new(std::sync::Mutex::new(String::new()));
@@ -71,6 +89,12 @@ impl LlmProcessor {
             if result.is_ok() {
                 cleaned = crate::llm::clean_response(&collected.lock().unwrap());
             } else {
+                // Fall back to the raw transcript, but surface the failure
+                // instead of silently degrading: the frontend shows it.
+                if let Err(e) = result {
+                    eprintln!("[pipeline] LLM cleanup failed: {}", e);
+                    let _ = app.emit("llm_error", serde_json::json!({"error": e.to_string()}));
+                }
                 cleaned = crate::llm::clean_response(text);
             }
         } else {
@@ -129,8 +153,18 @@ impl PipelineController {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
+            // Surface progress to the frontend: start_listening blocks on
+            // this download, so a silent no-op callback leaves the UI hung
+            // with no feedback on first run.
+            let app_dl = app.clone();
             let result = runtime.block_on(async {
-                download_model(vad_manifest, &model_dir_dl, |_, _| {}).await
+                download_model(vad_manifest, &model_dir_dl, |percent, bytes| {
+                    let _ = app_dl.emit(
+                        "model_download_progress",
+                        serde_json::json!({"id": vad_manifest.id, "percent": percent, "bytes": bytes}),
+                    );
+                })
+                .await
             });
             if let Err(e) = result {
                 let _ = app.emit(
@@ -171,8 +205,15 @@ impl PipelineController {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
+            let app_dl = app.clone();
             let result = runtime.block_on(async {
-                download_model(asr_manifest, &asr_dir, |_, _| {}).await
+                download_model(asr_manifest, &asr_dir, |percent, bytes| {
+                    let _ = app_dl.emit(
+                        "model_download_progress",
+                        serde_json::json!({"id": asr_manifest.id, "percent": percent, "bytes": bytes}),
+                    );
+                })
+                .await
             });
             if let Err(e) = result {
                 eprintln!("[pipeline] ASR model download FAILED: {}", e);
@@ -286,7 +327,9 @@ impl PipelineController {
                     crate::config::AsrProfile::WhisperTurbo | crate::config::AsrProfile::WhisperBase => {
                         match WhisperRecognizer::new(&model_dir, 4, false) {
                             Ok(mut r) => {
-                                r.set_language(&config_clone.language);
+                                if let Err(e) = r.set_language(&config_clone.language) {
+                                    let _ = app_clone.emit("asr_error", serde_json::json!({"error": e.to_string()}));
+                                }
                                 whisper = Some(r);
                                 let _ = app_clone
                                     .emit("asr_ready", serde_json::json!({ "backend": "whisper" }));

@@ -64,20 +64,19 @@ impl WhisperRecognizer {
     /// Set the recognition language. `"auto"` and `""` select auto-detect
     /// (`None`); anything else is passed through as the Whisper language tag.
     /// The underlying recognizer is rebuilt so the new language takes effect.
-    /// If the rebuild fails (e.g. missing model files), the previous
-    /// recognizer is kept and only the stored preference is updated.
-    pub fn set_language(&mut self, lang: &str) {
+    /// The stored language is committed only after a successful rebuild, so
+    /// a failed rebuild keeps retrying on the next call instead of latching
+    /// the new tag while transcribing in the old language.
+    pub fn set_language(&mut self, lang: &str) -> Result<()> {
         let new_language = normalize_language(lang);
         if new_language == self.language {
-            return;
+            return Ok(());
         }
-        self.language = new_language.clone();
         let model_dir = self.model_dir.clone();
-        if let Ok(recognizer) =
-            build_recognizer(&model_dir, self.num_threads, self.debug, new_language)
-        {
-            self.recognizer = recognizer;
-        }
+        let recognizer = build_recognizer(&model_dir, self.num_threads, self.debug, new_language.clone())?;
+        self.recognizer = recognizer;
+        self.language = new_language;
+        Ok(())
     }
 
     pub fn transcribe(&self, samples: &[f32]) -> String {

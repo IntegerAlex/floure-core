@@ -158,11 +158,11 @@ function Step2ModelDownload({
               <strong className="text-body text-text-primary">{model.name}</strong>
               <span className={cn(
                 "inline-flex items-center rounded-badge px-2 py-0.5 text-label font-semibold",
-                model.backend === "sherpa_onnx"
+                model.recommended
                   ? "bg-accent-muted border border-accent-muted-border text-accent-active"
                   : "bg-app-surface border border-border text-text-secondary",
               )}>
-                {model.backend === "sherpa_onnx" ? "GPU" : "CPU"}
+                {model.profile}
               </span>
             </div>
             <div className="flex items-center gap-3 text-small text-text-muted">

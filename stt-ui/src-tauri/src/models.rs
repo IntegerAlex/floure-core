@@ -301,10 +301,16 @@ pub async fn download_model(
     let url = model.url;
     let model_dir = target_dir;
 
-    if model_dir.join(".downloaded").exists() {
+    // Only trust the marker if the payload still verifies: a failed or
+    // interrupted run can leave a stale marker behind (e.g. verification
+    // failed after download), which would otherwise skip recovery forever.
+    if model_dir.join(".downloaded").exists()
+        && verify_model(model_dir.parent().unwrap_or(model_dir), model)
+    {
         eprintln!("[models] {} already downloaded, skipping", model.id);
         return Ok(());
     }
+    let _ = std::fs::remove_file(model_dir.join(".downloaded"));
 
     eprintln!(
         "[models] downloading {} -> {} ({} bytes, archive={})",
@@ -378,11 +384,15 @@ pub async fn download_model(
             // A 206 partial-content response honors our Range header and its
             // content-length counts from the resume offset; otherwise the
             // server ignored the range and we restart from the beginning.
+            // Derive everything from the effective offset: with a 200
+            // response, content-length is the FULL size and must not be
+            // added to resume_offset (that would fail the completion
+            // check on a correct file).
             let is_partial = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-            let content_len = response.content_length()
-                .unwrap_or(expected_total.saturating_sub(resume_offset));
-            let total = resume_offset + content_len;
             let effective_offset = if is_partial { resume_offset } else { 0 };
+            let content_len = response.content_length()
+                .unwrap_or(expected_total.saturating_sub(effective_offset));
+            let total = effective_offset + content_len;
             if resume_offset > 0 && !is_partial {
                 eprintln!(
                     "[models] {} server ignored Range request, re-downloading from 0",

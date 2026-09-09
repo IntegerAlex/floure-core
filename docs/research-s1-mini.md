@@ -43,7 +43,7 @@ S1-mini does not appear in:
 | Transformers (Python) | SafeTensors (BF16) | `pip install transformers` |
 | vLLM | SafeTensors | `vllm serve superwhisper/s1-mini` |
 | SGLang | SafeTensors | `sglang.launch_server` |
-| llama.cpp | GGUF | `llama-server -hf superwhisper/s1-mini-GGUF:Q4_K_M` |
+| llama.cpp | GGUF | `llama-server -hf superwhisper/s1-mini-GGUF:Q4_K_M --jinja --chat-template-kwargs '{"enable_thinking":false}' --temp 0` |
 | Ollama | GGUF | `ollama run hf.co/superwhisper/s1-mini-GGUF:F16` |
 | LM Studio | GGUF | Load from HuggingFace |
 | ONNX Runtime GenAI | ONNX (unofficial) | `elbruno/s1-mini-onnx` |

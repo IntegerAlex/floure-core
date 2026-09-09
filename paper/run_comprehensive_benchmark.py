@@ -68,8 +68,8 @@ def run_wer_benchmark(output_dir: str = "/tmp/librispeech_test_clean") -> dict:
         print("[1/4] Loading LibriSpeech test-clean...")
         ds = load_dataset(
             "openslr/librispeech_asr",
-            "test.clean",
-            split="validation",
+            "all",
+            split="test.clean",
             trust_remote_code=True,
             streaming=True,
         )
@@ -123,7 +123,7 @@ def run_wer_benchmark(output_dir: str = "/tmp/librispeech_test_clean") -> dict:
     except ImportError:
         pass
 
-    results = {"profiles": {}}
+    results = {"profiles": {}, "synthetic": False}
     print("[4/4] Running WER evaluation...")
 
     for profile_name, backend, model_name, beam_size in profiles:
@@ -619,9 +619,11 @@ def main():
     print("\nSUMMARY:")
     print("-" * 40)
     if "wer" in all_results and "profiles" in all_results.get("wer", {}):
+        synthetic = all_results["wer"].get("synthetic", False)
         for pname, pdata in all_results["wer"]["profiles"].items():
             if pdata.get("wer_pct") is not None:
-                print(f"  WER {pname}: {pdata['wer_pct']}% (n={pdata['n']})")
+                tag = " (SYNTHETIC, not LibriSpeech)" if synthetic else ""
+                print(f"  WER {pname}: {pdata['wer_pct']}% (n={pdata['n']}){tag}")
     if "latency_large" in all_results:
         lat = all_results["latency_large"]
         if lat.get("n", 0) > 0:

@@ -244,14 +244,16 @@ impl LlmCleanup {
         loop {
             let token = sampler.sample(&ctx, idx);
 
+            // Stop before emitting: the EOS piece (e.g. `<|im_end|>`) is a
+            // control token, not transcript text.
+            if token == eos_token || generated >= max_new_tokens {
+                break;
+            }
+
             let piece = model.token_to_bytes(token, Special::Plaintext)?;
             let s = String::from_utf8_lossy(&piece).to_string();
             callback(s);
             generated += 1;
-
-            if token == eos_token || generated >= max_new_tokens {
-                break;
-            }
 
             // Advance the KV position and decode one new token at a time.
             n_pos += 1;
