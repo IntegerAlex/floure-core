@@ -150,7 +150,7 @@ export default function HistoryPage({ onBack }: Props) {
     try {
       if (isTauri()) {
         const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("delete_entry", { id });
+        await invoke("delete_history_entry", { id });
       } else {
         await apiFetch(`/history/${id}`, { method: "DELETE" });
       }
@@ -166,7 +166,7 @@ export default function HistoryPage({ onBack }: Props) {
       if (isTauri()) {
         const { invoke } = await import("@tauri-apps/api/core");
         for (const id of ids) {
-          await invoke("delete_entry", { id });
+          await invoke("delete_history_entry", { id });
         }
       } else {
         for (const id of ids) {
@@ -182,8 +182,8 @@ export default function HistoryPage({ onBack }: Props) {
     try {
       if (isTauri()) {
         const { invoke } = await import("@tauri-apps/api/core");
-        const result = await invoke<{ favorite: number }>("toggle_favorite", { id });
-        setAllRows((prev) => prev.map((r) => r.id === id ? { ...r, favorite: result.favorite } : r));
+        const favorite = await invoke<number>("toggle_history_favorite", { id });
+        setAllRows((prev) => prev.map((r) => r.id === id ? { ...r, favorite } : r));
       } else {
         const result = await apiFetch(`/history/${id}/favorite`, { method: "POST" });
         setAllRows((prev) => prev.map((r) => r.id === id ? { ...r, favorite: result.favorite } : r));

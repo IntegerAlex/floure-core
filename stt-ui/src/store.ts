@@ -1,10 +1,8 @@
 // ── Global state store (Zustand-lite pattern with React Context) ──
-import { createContext, useContext } from "react";
+import { createContext } from "react";
 
 export type ASRBackend = "sherpa_onnx";
 export type ASRMODEL = "parakeet" | "whisper-turbo" | "whisper-base";
-export type LLMBackend = "local" | "deepseek" | "openrouter";
-export type LLMMode = "off" | "cleanup" | "bullet_list" | "email" | "commit_message";
 
 export type LlmModelBackend = "llama_cpp" | "deepseek" | "openrouter";
 
@@ -119,59 +117,37 @@ export interface OnboardingState {
   step: number;
   totalSteps: number;
   completed: boolean;
-  skipped: boolean;
   systemChecks: SystemCheck[];
   selectedMicIndex: number | null;
   micLevel: number;
   clipboardEnabled: boolean;
   typingEnabled: boolean;
-  preferredModel: string;
-  preferredLLMBackend: LLMBackend;
-  llmMode: LLMMode;
   modelDownloadProgress: Record<string, { percent: number; bytesDownloaded: number; bytesTotal: number; status: "idle" | "downloading" | "done" | "error" }>;
   error: string | null;
 }
 
 export type OnboardingAction =
-  | { type: "SET_STEP"; step: number }
   | { type: "NEXT_STEP" }
   | { type: "SET_SYSTEM_CHECKS"; checks: SystemCheck[] }
   | { type: "SET_COMPLETED" }
-  | { type: "SET_SKIPPED" }
-  | { type: "SET_MIC"; index: number | null; level: number }
   | { type: "SET_CLIPBOARD"; enabled: boolean }
   | { type: "SET_TYPING"; enabled: boolean }
-  | { type: "SET_MODEL"; name: string }
-  | { type: "SET_LLM_BACKEND"; backend: LLMBackend }
-  | { type: "SET_LLM_MODE"; mode: LLMMode }
   | { type: "SET_DOWNLOAD_PROGRESS"; name: string; percent: number; bytesDownloaded: number; bytesTotal: number; status: "idle" | "downloading" | "done" | "error" }
   | { type: "SET_ERROR"; error: string }
   | { type: "CLEAR_ERROR" };
 
 export function onboardingReducer(state: OnboardingState, action: OnboardingAction): OnboardingState {
   switch (action.type) {
-    case "SET_STEP":
-      return { ...state, step: action.step };
     case "NEXT_STEP":
       return { ...state, step: Math.min(state.step + 1, state.totalSteps) };
     case "SET_SYSTEM_CHECKS":
       return { ...state, systemChecks: action.checks };
     case "SET_COMPLETED":
       return { ...state, completed: true };
-    case "SET_SKIPPED":
-      return { ...state, skipped: true, completed: true };
-    case "SET_MIC":
-      return { ...state, selectedMicIndex: action.index, micLevel: action.level };
     case "SET_CLIPBOARD":
       return { ...state, clipboardEnabled: action.enabled };
     case "SET_TYPING":
       return { ...state, typingEnabled: action.enabled };
-    case "SET_MODEL":
-      return { ...state, preferredModel: action.name };
-    case "SET_LLM_BACKEND":
-      return { ...state, preferredLLMBackend: action.backend };
-    case "SET_LLM_MODE":
-      return { ...state, llmMode: action.mode };
     case "SET_DOWNLOAD_PROGRESS":
       return {
         ...state,
@@ -198,15 +174,11 @@ export const DEFAULT_ONBOARDING: OnboardingState = {
   step: 0,
   totalSteps: 5,
   completed: false,
-  skipped: false,
   systemChecks: [],
   selectedMicIndex: null,
   micLevel: 0,
   clipboardEnabled: true,
   typingEnabled: true,
-  preferredModel: "parakeet-tdt-0.6b-v2-int8",
-  preferredLLMBackend: "local",
-  llmMode: "cleanup",
   modelDownloadProgress: {},
   error: null,
 };
@@ -219,9 +191,3 @@ export const AppStateContext = createContext<{
   view: AppView;
   setView: (v: AppView) => void;
 } | null>(null);
-
-export function useAppState() {
-  const ctx = useContext(AppStateContext);
-  if (!ctx) throw new Error("useAppState must be used within AppStateProvider");
-  return ctx;
-}

@@ -6,8 +6,6 @@ pub struct VoiceActivityDetector {
     buffer: Vec<f32>,
     offset: usize,
     window_size: usize,
-    #[allow(dead_code)]
-    threshold: f32,
 }
 
 impl VoiceActivityDetector {
@@ -30,7 +28,6 @@ impl VoiceActivityDetector {
             buffer: Vec::new(),
             offset: 0,
             window_size: 512,
-            threshold,
         })
     }
 
@@ -42,11 +39,6 @@ impl VoiceActivityDetector {
                 .accept_waveform(&self.buffer[self.offset..self.offset + self.window_size]);
             self.offset += self.window_size;
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn is_speech_detected(&self) -> bool {
-        self.vad.detected()
     }
 
     pub fn try_get_segment(&mut self) -> Option<Vec<f32>> {
@@ -63,42 +55,23 @@ impl VoiceActivityDetector {
         self.buffer.clear();
         self.offset = 0;
     }
-
-    /// Current speech threshold (constructor value, raised by [`Self::calibrate`]).
-    #[allow(dead_code)]
-    pub fn threshold(&self) -> f32 {
-        self.threshold
-    }
-
-    /// Learn a speech threshold from background-noise calibration samples.
-    ///
-    /// Computes the RMS energy of `samples` and raises the threshold to
-    /// `rms * CALIBRATION_FACTOR` when that exceeds the current threshold;
-    /// the threshold never decreases, so calibrating on quiet audio is a
-    /// no-op. Factor 3.0 (~9.5 dB above the noise floor) is a common speech
-    /// margin. Clamped to 1.0 to stay a valid Silero probability threshold.
-    /// Standalone: callers decide when to calibrate (not wired into feed).
-    #[allow(dead_code)]
-    pub fn calibrate(&mut self, samples: &[f32]) {
-        self.threshold = learned_threshold(self.threshold, samples);
-    }
-}
-
-/// Pure RMS threshold-learning rule behind [`VoiceActivityDetector::calibrate`].
-#[allow(dead_code)]
-fn learned_threshold(current: f32, samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return current;
-    }
-    const CALIBRATION_FACTOR: f32 = 3.0;
-    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-    let rms = (sum_sq / samples.len() as f32).sqrt();
-    current.max((rms * CALIBRATION_FACTOR).min(1.0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pure RMS threshold-learning rule (kept as a tested helper for future
+    /// background-noise calibration work).
+    fn learned_threshold(current: f32, samples: &[f32]) -> f32 {
+        if samples.is_empty() {
+            return current;
+        }
+        const CALIBRATION_FACTOR: f32 = 3.0;
+        let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+        let rms = (sum_sq / samples.len() as f32).sqrt();
+        current.max((rms * CALIBRATION_FACTOR).min(1.0))
+    }
 
     #[test]
     fn calibration_raises_threshold_on_loud_noise() {

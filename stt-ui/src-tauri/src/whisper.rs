@@ -80,11 +80,6 @@ impl WhisperRecognizer {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn language(&self) -> Option<&str> {
-        self.language.as_deref()
-    }
-
     pub fn transcribe(&self, samples: &[f32]) -> String {
         let stream = self.recognizer.create_stream();
         stream.accept_waveform(16000, samples);

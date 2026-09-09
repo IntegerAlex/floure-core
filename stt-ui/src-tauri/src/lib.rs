@@ -114,6 +114,39 @@ async fn get_history(limit: usize) -> Result<Vec<TranscriptRow>, AppError> {
     Ok(rows)
 }
 
+#[tauri::command]
+async fn delete_history_entry(id: i64) -> Result<bool, AppError> {
+    let db_path = history_db_path()?;
+    let ok = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        conn.execute("DELETE FROM transcripts WHERE id = ?1", [id])?;
+        Ok::<bool, AppError>(true)
+    })
+    .await??;
+    Ok(ok)
+}
+
+#[tauri::command]
+async fn toggle_history_favorite(id: i64) -> Result<i64, AppError> {
+    let db_path = history_db_path()?;
+    let new_val = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        let current: i64 = conn.query_row(
+            "SELECT favorite FROM transcripts WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )?;
+        let new_val = if current != 0 { 0 } else { 1 };
+        conn.execute(
+            "UPDATE transcripts SET favorite = ?1 WHERE id = ?2",
+            rusqlite::params![new_val, id],
+        )?;
+        Ok::<i64, AppError>(new_val)
+    })
+    .await??;
+    Ok(new_val)
+}
+
 // ---------------------------------------------------------------------------
 // Insights types
 // ---------------------------------------------------------------------------
@@ -926,22 +959,7 @@ mod win32 {
         fn GetWindowThreadProcessId(hWnd: HWND, lpdwProcessId: *mut u32) -> u32;
         fn GetCurrentThreadId() -> u32;
         fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
-        fn keybd_event(bVk: u8, bScan: u8, dwFlags: u32, dwExtraInfo: usize);
-        fn SetClipboardData(uFormat: u32, hMem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-        fn OpenClipboard(hWndNewOwner: HWND) -> i32;
-        fn EmptyClipboard() -> i32;
-        fn CloseClipboard() -> i32;
-        fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> *mut core::ffi::c_void;
-        fn GlobalLock(hMem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-        fn GlobalUnlock(hMem: *mut core::ffi::c_void) -> i32;
-        fn lstrcpyW(lpString1: *mut u16, lpString2: *const u16) -> *mut u16;
     }
-
-    const KEYEVENTF_KEYUP: u32 = 0x0002;
-    const VK_CONTROL: u8 = 0x11;
-    const VK_V: u8 = 0x56;
-    const CF_UNICODETEXT: u32 = 13;
-    const GMEM_MOVEABLE: u32 = 0x0002;
 
     /// Get the current foreground window handle as a number.
     pub fn get_foreground_hwnd() -> u64 {
@@ -968,45 +986,6 @@ mod win32 {
             let ok = SetForegroundWindow(target) != 0;
             AttachThreadInput(current_tid, target_tid, 0);
             ok
-        }
-    }
-
-    /// Set clipboard content using raw Win32 API (no PowerShell needed).
-    pub fn set_clipboard(text: &str) -> bool {
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let byte_len = wide.len() * 2;
-        unsafe {
-            if OpenClipboard(std::ptr::null_mut()) == 0 {
-                return false;
-            }
-            EmptyClipboard();
-            let h_mem = GlobalAlloc(GMEM_MOVEABLE, byte_len);
-            if h_mem.is_null() {
-                CloseClipboard();
-                return false;
-            }
-            let ptr = GlobalLock(h_mem) as *mut u16;
-            if ptr.is_null() {
-                CloseClipboard();
-                return false;
-            }
-            lstrcpyW(ptr, wide.as_ptr());
-            GlobalUnlock(h_mem);
-            SetClipboardData(CF_UNICODETEXT, h_mem);
-            CloseClipboard();
-        }
-        true
-    }
-
-    /// Send Ctrl+V using keybd_event — works from any GUI process with an
-    /// active message loop (the Tauri app main thread).
-    #[allow(dead_code)]
-    pub fn send_ctrl_v() {
-        unsafe {
-            keybd_event(VK_CONTROL, 0, 0, 0);
-            keybd_event(VK_V, 0, 0, 0);
-            keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0);
-            keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
         }
     }
 }
@@ -1051,50 +1030,6 @@ mod win32 {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
-    }
-
-    /// Set clipboard content on Linux using wl-copy (Wayland) or xclip (X11).
-    #[allow(dead_code)]
-    pub fn set_clipboard(text: &str) -> bool {
-        let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-        if is_wayland {
-            return std::process::Command::new("wl-copy")
-                .arg(text)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-        }
-        // X11: xclip reads from stdin
-        use std::io::Write;
-        let result = std::process::Command::new("xclip")
-            .args(["-selection", "clipboard"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                if let Some(ref mut stdin) = child.stdin {
-                    stdin.write_all(text.as_bytes())?;
-                }
-                drop(child.stdin.take());
-                child.wait()
-            });
-        result.map(|o| o.success()).unwrap_or(false)
-    }
-
-    /// Simulate Ctrl+V paste on Linux.
-    #[allow(dead_code)]
-    pub fn send_ctrl_v() {
-        let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-        if is_wayland {
-            // wtype doesn't support Ctrl+V; try ydotool or just skip
-            let _ = std::process::Command::new("ydotool")
-                .args(["key", "29:1", "47:1", "47:0", "29:0"])
-                .output();
-        } else {
-            // xdotool: Ctrl+V
-            let _ = std::process::Command::new("xdotool")
-                .args(["key", "--clearmodifiers", "ctrl+v"])
-                .output();
-        }
     }
 }
 
@@ -1331,6 +1266,8 @@ pub fn run() {
             download_model,
             delete_model_file,
             get_history,
+            delete_history_entry,
+            toggle_history_favorite,
             get_insights,
             get_voice_intelligence,
             get_dictionary,

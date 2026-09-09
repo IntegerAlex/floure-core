@@ -26,7 +26,7 @@ interface SidebarItemProps {
   onClick?: () => void;
 }
 
-export function SidebarItem({ icon, label, active, badge, onClick }: SidebarItemProps) {
+function SidebarItem({ icon, label, active, badge, onClick }: SidebarItemProps) {
   return (
     <button
       onClick={onClick}
@@ -59,7 +59,7 @@ interface SidebarSectionProps {
   className?: string;
 }
 
-export function SidebarSection({ children, className }: SidebarSectionProps) {
+function SidebarSection({ children, className }: SidebarSectionProps) {
   return (
     <div className={cn("flex flex-col gap-1", className)}>
       {children}

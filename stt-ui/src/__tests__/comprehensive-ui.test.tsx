@@ -125,7 +125,6 @@ vi.mock("@/hooks/useOnboarding", () => ({
       micLevel: 0,
       clipboardEnabled: false,
       typingEnabled: false,
-      preferredModel: "small.en",
       modelDownloadProgress: {},
       error: null,
     },
@@ -197,7 +196,6 @@ import { FloureToggle } from "@/components/FloureToggle";
 import { FloureInput } from "@/components/FloureInput";
 import { Button } from "@/components/Button";
 import { Badge } from "@/components/Badge";
-import { Card } from "@/components/Card";
 import { Divider } from "@/components/Divider";
 import MicButton from "@/components/MicButton";
 import PttOverlay from "@/components/PttOverlay";
@@ -453,30 +451,6 @@ describe("Badge", () => {
     const ref = React.createRef<HTMLSpanElement>();
     renderWithProviders(<Badge ref={ref}>Test</Badge>);
     expect(ref.current).toBeInstanceOf(HTMLSpanElement);
-  });
-});
-
-// ══════════════════════════════════════════════════════════════════
-// 6. Card
-// ══════════════════════════════════════════════════════════════════
-describe("Card", () => {
-  it("renders without crashing", () => {
-    renderWithProviders(<Card>Content</Card>);
-    expect(screen.getByText("Content")).toBeInTheDocument();
-  });
-
-  it("applies variant classes", () => {
-    const { rerender } = renderWithProviders(<Card variant="sidebar">Test</Card>);
-    expect(screen.getByText("Test").className).toContain("bg-app-sidebar");
-
-    rerender(<Card variant="stats">Test</Card>);
-    expect(screen.getByText("Test").className).toContain("bg-app-surface-card");
-  });
-
-  it("forwards ref", () => {
-    const ref = React.createRef<HTMLDivElement>();
-    renderWithProviders(<Card ref={ref}>Test</Card>);
-    expect(ref.current).toBeInstanceOf(HTMLDivElement);
   });
 });
 
@@ -1247,11 +1221,6 @@ describe("WidgetView", () => {
 // 32. Store: onboardingReducer
 // ══════════════════════════════════════════════════════════════════
 describe("onboardingReducer", () => {
-  it("SET_STEP updates step", () => {
-    const result = onboardingReducer(DEFAULT_ONBOARDING, { type: "SET_STEP", step: 3 });
-    expect(result.step).toBe(3);
-  });
-
   it("NEXT_STEP increments step", () => {
     const result = onboardingReducer(DEFAULT_ONBOARDING, { type: "NEXT_STEP" });
     expect(result.step).toBe(1);
@@ -1268,22 +1237,10 @@ describe("onboardingReducer", () => {
     expect(result.completed).toBe(true);
   });
 
-  it("SET_SKIPPED marks skipped and completed", () => {
-    const result = onboardingReducer(DEFAULT_ONBOARDING, { type: "SET_SKIPPED" });
-    expect(result.skipped).toBe(true);
-    expect(result.completed).toBe(true);
-  });
-
   it("SET_SYSTEM_CHECKS updates checks", () => {
     const checks = [{ name: "Test", status: "pass" as const, message: "OK" }];
     const result = onboardingReducer(DEFAULT_ONBOARDING, { type: "SET_SYSTEM_CHECKS", checks });
     expect(result.systemChecks).toEqual(checks);
-  });
-
-  it("SET_MIC updates mic state", () => {
-    const result = onboardingReducer(DEFAULT_ONBOARDING, { type: "SET_MIC", index: 0, level: 0.5 });
-    expect(result.selectedMicIndex).toBe(0);
-    expect(result.micLevel).toBe(0.5);
   });
 
   it("SET_CLIPBOARD updates clipboard state", () => {
@@ -1294,11 +1251,6 @@ describe("onboardingReducer", () => {
   it("SET_TYPING updates typing state", () => {
     const result = onboardingReducer(DEFAULT_ONBOARDING, { type: "SET_TYPING", enabled: true });
     expect(result.typingEnabled).toBe(true);
-  });
-
-  it("SET_MODEL updates preferred model", () => {
-    const result = onboardingReducer(DEFAULT_ONBOARDING, { type: "SET_MODEL", name: "large-v3-turbo" });
-    expect(result.preferredModel).toBe("large-v3-turbo");
   });
 
   it("SET_DOWNLOAD_PROGRESS updates progress", () => {
@@ -1339,15 +1291,11 @@ describe("DEFAULT_ONBOARDING", () => {
     expect(DEFAULT_ONBOARDING.step).toBe(0);
     expect(DEFAULT_ONBOARDING.totalSteps).toBe(5);
     expect(DEFAULT_ONBOARDING.completed).toBe(false);
-    expect(DEFAULT_ONBOARDING.skipped).toBe(false);
     expect(DEFAULT_ONBOARDING.systemChecks).toEqual([]);
     expect(DEFAULT_ONBOARDING.selectedMicIndex).toBeNull();
     expect(DEFAULT_ONBOARDING.micLevel).toBe(0);
     expect(DEFAULT_ONBOARDING.clipboardEnabled).toBe(true);
     expect(DEFAULT_ONBOARDING.typingEnabled).toBe(true);
-    expect(DEFAULT_ONBOARDING.preferredModel).toBe("parakeet-tdt-0.6b-v2-int8");
-    expect(DEFAULT_ONBOARDING.preferredLLMBackend).toBe("local");
-    expect(DEFAULT_ONBOARDING.llmMode).toBe("cleanup");
     expect(DEFAULT_ONBOARDING.error).toBeNull();
   });
 });

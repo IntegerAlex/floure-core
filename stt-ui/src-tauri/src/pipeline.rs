@@ -348,13 +348,6 @@ impl PipelineController {
 
         Ok(())
     }
-
-    #[allow(dead_code)]
-    pub fn stop(&self) {
-        if let Some(flag) = PIPELINE_RUNNING.get() {
-            flag.store(false, Ordering::SeqCst);
-        }
-    }
 }
 
 pub fn start_pipeline(app: tauri::AppHandle, config: AppConfig) -> Result<()> {

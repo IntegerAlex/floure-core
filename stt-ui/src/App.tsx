@@ -840,8 +840,6 @@ function App() {
   const [highlightPermissions, setHighlightPermissions] = useState(false);
   const [pttActive, setPttActive] = useState(false);
   const [resolvedModel, setResolvedModel] = useState<{ profile: string; model: string; backend: string; device: string } | null>(null);
-  const pttHwndRef = useRef<number | null>(null);  // Target HWND captured on PTT press
-  const pttTextRef = useRef<string>("");            // Latest transcription text for PTT commit
   const [view, setView] = useState<AppView>(
     localStorage.getItem("onboarding_completed") === "true" ? "main" : "onboarding"
   );
@@ -1131,16 +1129,7 @@ function App() {
       setToast("Engine not ready — wait a moment and try again");
       return;
     }
-    // Capture the foreground window BEFORE recording steals focus
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const hwnd = await invoke<number>("get_foreground_hwnd");
-      pttHwndRef.current = hwnd;
-      console.log(`[PTT] Captured HWND: ${hwnd} (source=${source})`);
-    } catch {
-      pttHwndRef.current = null;
-    }
-    pttTextRef.current = "";
+    // Backend handles typing directly — no need for frontend focus restore
     console.log(`[PTT] Start requested — source=${source}`);
     runtimeRef.current.start(); // Sends start_recording to backend
     setConnected(true);
@@ -1152,8 +1141,6 @@ function App() {
     if (!runtimeRef.current) return;
     isStartingRef.current = false;
     // Backend handles typing directly — no need for frontend type_text
-    pttHwndRef.current = null;
-    pttTextRef.current = "";
     console.log("[PTT] Stop requested");
     runtimeRef.current.stop(); // Sends stop_recording to backend
     setConnected(false);

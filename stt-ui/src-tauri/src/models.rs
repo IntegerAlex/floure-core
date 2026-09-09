@@ -81,11 +81,6 @@ pub fn find_model(id: &str) -> Option<&'static ModelManifest> {
     MODEL_MANIFEST.iter().find(|m| m.id == id)
 }
 
-#[allow(dead_code)]
-pub fn model_path(models_dir: &Path, model: &ModelManifest) -> PathBuf {
-    models_dir.join(model.id)
-}
-
 pub struct ModelManager {
     model_dir: PathBuf,
 }
