@@ -78,16 +78,17 @@ function SnippetCard({
         <span className="text-sunset text-[15px] font-mono font-medium tracking-tight">
           {snippet.trigger}
         </span>
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
           <button
             onClick={onCopy}
             className={cn(
               "w-8 h-8 flex items-center justify-center rounded-[8px] transition-colors",
               isCopied
                 ? "bg-[#22C55E]/15 text-[#22C55E]"
-                : "hover:bg-border-hover text-text-disabled hover:text-text-secondary",
+                : "hover:bg-border-hover text-text-muted hover:text-text-secondary",
             )}
             title="Copy to clipboard"
+            aria-label={`Copy ${snippet.title} to clipboard`}
           >
             {isCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
           </button>
@@ -95,11 +96,13 @@ function SnippetCard({
             onClick={onToggleFavorite}
             className="w-8 h-8 flex items-center justify-center rounded-[8px] hover:bg-border-hover transition-colors"
             title={snippet.isFavorite ? "Unpin" : "Pin to top"}
+            aria-label={snippet.isFavorite ? `Unpin ${snippet.title}` : `Pin ${snippet.title} to top`}
+            aria-pressed={snippet.isFavorite}
           >
             <Star
               className={cn(
                 "w-4 h-4 transition-colors",
-                snippet.isFavorite ? "fill-[#D4883A] text-sunset" : "text-text-disabled",
+                snippet.isFavorite ? "fill-[#D4883A] text-sunset" : "text-text-muted",
               )}
             />
           </button>
@@ -107,15 +110,17 @@ function SnippetCard({
             onClick={onEdit}
             className="w-8 h-8 flex items-center justify-center rounded-[8px] hover:bg-border-hover transition-colors"
             title="Edit"
+            aria-label={`Edit ${snippet.title}`}
           >
-            <Pencil className="w-4 h-4 text-text-disabled" />
+            <Pencil className="w-4 h-4 text-text-muted" />
           </button>
           <button
             onClick={onDelete}
             className="w-8 h-8 flex items-center justify-center rounded-[8px] hover:bg-border-hover transition-colors"
             title="Delete"
+            aria-label={`Delete ${snippet.title}`}
           >
-            <Trash2 className="w-4 h-4 text-text-disabled hover:text-[#E55353]" />
+            <Trash2 className="w-4 h-4 text-text-muted hover:text-red-600" />
           </button>
         </div>
       </div>
@@ -133,18 +138,18 @@ function SnippetCard({
         <div className="flex items-center gap-2 flex-wrap">
           <Badge
             variant="accent"
-            className="!text-[10px] !px-2 !py-0 !h-5"
+            className="!text-[11px] !px-2 !py-0 !h-5"
             style={{ color: cat.color, backgroundColor: cat.bg } as React.CSSProperties}
           >
             {cat.label}
           </Badge>
           {snippet.tags.slice(0, 3).map((tag) => (
-            <span key={tag} className="text-text-disabled text-[11px]">
+            <span key={tag} className="text-text-muted text-[11px]">
               #{tag}
             </span>
           ))}
         </div>
-        <span className="text-text-disabled text-[12px] shrink-0">
+        <span className="text-text-muted text-[12px] shrink-0">
           Used {snippet.useCount} times
         </span>
       </div>
@@ -177,8 +182,8 @@ function SnippetModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-[rgba(44,37,32,0.4)] backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-[520px] mx-4 rounded-[20px] bg-app-surface-dark border border-border-hover shadow-2xl max-h-[85vh] overflow-y-auto">
+      <div className="absolute inset-0 bg-[rgba(44,37,32,0.4)]" onClick={onClose} />
+      <div className="relative w-full max-w-[520px] mx-4 rounded-xl bg-app-surface-dark border border-border-hover shadow-lg max-h-[85vh] overflow-y-auto">
         <div className="px-6 pt-6 pb-4">
           <h3 className="text-text-primary text-[16px] font-semibold">
             {snippet ? "Edit Snippet" : "Add Snippet"}
@@ -190,35 +195,38 @@ function SnippetModal({
 
         <div className="px-6 space-y-4 pb-4">
           <div>
-            <label className="block text-text-secondary text-[12px] font-medium mb-1.5">Title</label>
+            <label htmlFor="snippet-title" className="block text-text-secondary text-[12px] font-medium mb-1.5">Title</label>
             <input
+              id="snippet-title"
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Meeting Follow-up"
-              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-disabled outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
+              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-muted outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
             />
           </div>
 
           <div>
-            <label className="block text-text-secondary text-[12px] font-medium mb-1.5">Trigger</label>
+            <label htmlFor="snippet-trigger" className="block text-text-secondary text-[12px] font-medium mb-1.5">Trigger</label>
             <input
+              id="snippet-trigger"
               type="text"
               value={trigger}
               onChange={(e) => setTrigger(e.target.value)}
               placeholder="e.g. /followup"
-              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-sunset text-[14px] font-mono placeholder:text-text-disabled outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
+              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-sunset text-[14px] font-mono placeholder:text-text-muted outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
             />
           </div>
 
           <div>
-            <label className="block text-text-secondary text-[12px] font-medium mb-1.5">Content</label>
+            <label htmlFor="snippet-content" className="block text-text-secondary text-[12px] font-medium mb-1.5">Content</label>
             <textarea
+              id="snippet-content"
               value={content}
               onChange={(e) => setContent(e.target.value)}
               placeholder="Enter snippet content. Use {{variable}} for dynamic placeholders."
               rows={8}
-              className="w-full px-3 py-2.5 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[13px] leading-relaxed placeholder:text-text-disabled outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors resize-none font-mono"
+              className="w-full px-3 py-2.5 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[13px] leading-relaxed placeholder:text-text-muted outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors resize-none font-mono"
             />
           </div>
 
@@ -232,7 +240,7 @@ function SnippetModal({
                   className={cn(
                     "px-3 py-1.5 rounded-[8px] text-[12px] font-medium transition-all duration-150",
                     category === opt.value
-                      ? "bg-accent-surface text-accent border border-[rgba(255,59,86,0.15)]"
+                      ? "bg-accent-surface text-accent-active border border-[rgba(255,59,86,0.15)]"
                       : "bg-app-surface-secondary text-text-muted border border-border hover:border-border-hover",
                   )}
                 >
@@ -243,15 +251,16 @@ function SnippetModal({
           </div>
 
           <div>
-            <label className="block text-text-secondary text-[12px] font-medium mb-1.5">
-              Tags <span className="text-text-disabled">(comma separated)</span>
+            <label htmlFor="snippet-tags" className="block text-text-secondary text-[12px] font-medium mb-1.5">
+              Tags <span className="text-text-muted">(comma separated)</span>
             </label>
             <input
+              id="snippet-tags"
               type="text"
               value={tagsInput}
               onChange={(e) => setTagsInput(e.target.value)}
               placeholder="e.g. sales, followup, meeting"
-              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-disabled outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
+              className="w-full h-10 px-3 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-muted outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
             />
           </div>
         </div>
@@ -299,8 +308,8 @@ function DeleteConfirm({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-[rgba(44,37,32,0.4)] backdrop-blur-sm" onClick={onCancel} />
-      <div className="relative w-full max-w-[380px] mx-4 rounded-[20px] bg-app-surface-dark border border-border-hover shadow-2xl p-6">
+      <div className="absolute inset-0 bg-[rgba(44,37,32,0.4)]" onClick={onCancel} />
+      <div className="relative w-full max-w-[380px] mx-4 rounded-xl bg-app-surface-dark border border-border-hover shadow-lg p-6">
         <h3 className="text-text-primary text-[16px] font-semibold">Delete Snippet</h3>
         <p className="text-text-muted text-[14px] mt-2">
           Are you sure you want to delete{" "}
@@ -458,20 +467,22 @@ export default function SnippetsPage() {
 
         {/* Search */}
         <div className="relative mb-4">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-disabled" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search snippets..."
-            className="w-full h-10 pl-10 pr-10 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-disabled outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
+            aria-label="Search snippets"
+            className="w-full h-10 pl-10 pr-10 rounded-[10px] bg-app-surface-secondary border border-border text-text-primary text-[14px] placeholder:text-text-muted outline-none focus:border-accent focus:bg-accent-focus-surface transition-colors"
           />
           {search && (
             <button
               onClick={() => setSearch("")}
+              aria-label="Clear search"
               className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full hover:bg-border-hover transition-colors"
             >
-              <X className="w-3.5 h-3.5 text-text-disabled" />
+              <X className="w-3.5 h-3.5 text-text-muted" />
             </button>
           )}
         </div>

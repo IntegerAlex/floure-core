@@ -20,7 +20,7 @@ export default function MicButton({ status, connected, onToggle }: MicButtonProp
       <button
         onClick={onToggle}
         className={cn(
-          "relative flex items-center justify-center rounded-full transition-all duration-300",
+          "relative flex items-center justify-center rounded-full transition-all duration-200",
           "w-[80px] h-[80px]",
           isError && [
             "bg-app-surface-secondary border-2 border-[#EF4444]",
@@ -50,7 +50,7 @@ export default function MicButton({ status, connected, onToggle }: MicButtonProp
       >
         <div
           className={cn(
-            "transition-all duration-300",
+            "transition-all duration-200",
             isActive || isError ? "text-white" : "text-text-muted",
           )}
         >
@@ -59,7 +59,7 @@ export default function MicButton({ status, connected, onToggle }: MicButtonProp
       </button>
       {isIdle && (
         <span className="text-[11px] text-text-muted select-none">
-          Press <kbd className="px-1 py-0.5 bg-border border border-border-hover rounded text-[10px] font-mono">Space</kbd> to start
+          Press <kbd className="px-1 py-0.5 bg-border border border-border-hover rounded text-[11px] font-mono">Space</kbd> to start
         </span>
       )}
     </div>

@@ -30,15 +30,16 @@ import Waveform from "./components/Waveform";
 
 const SettingsSchema = z.object({
   wsPort: z.number().int().min(1).max(65535),
-  asrProfile: z.enum(["auto", "speed", "balanced", "accuracy", "distil", "turbo"]),
-  backend: z.enum(["auto", "whisper_cpp", "faster_whisper"]),
+  asrProfile: z.enum(["auto", "parakeet", "whisper-turbo", "whisper-base"]),
+  backend: z.enum(["sherpa_onnx"]),
   model: z.string().max(100),
-  llmMode: z.enum(["cleanup", "off", "bullet_list", "email", "commit_message"]),
-  llmProvider: z.enum(["deepseek", "openrouter"]),
+  llmMode: z.enum(["off", "cleanup", "bullet_list", "email", "commit_message"]),
+  llmProvider: z.enum(["local", "deepseek", "openrouter"]),
   llmModel: z.string().max(100),
   llmFallback: z.string().max(100),
-  deepseekApiKey: z.string().max(200),
-  openrouterApiKey: z.string().max(200),
+  // API keys are session-only: never persisted (see save effect below).
+  deepseekApiKey: z.string().max(200).default(""),
+  openrouterApiKey: z.string().max(200).default(""),
   fastCommit: z.boolean(),
   typing: z.boolean(),
   clipboard: z.boolean(),
@@ -63,11 +64,11 @@ interface TranscriptLine {
 
 export interface RuntimeSettings {
   wsPort: number;
-  asrProfile: "auto" | "speed" | "balanced" | "accuracy" | "distil" | "turbo";
-  backend: "auto" | "whisper_cpp" | "faster_whisper";
+  asrProfile: "auto" | "parakeet" | "whisper-turbo" | "whisper-base";
+  backend: "sherpa_onnx";
   model: string;
   llmMode: "cleanup" | "off" | "bullet_list" | "email" | "commit_message";
-  llmProvider: "deepseek" | "openrouter";
+  llmProvider: "local" | "deepseek" | "openrouter";
   llmModel: string;
   llmFallback: string;
   deepseekApiKey: string;
@@ -82,11 +83,11 @@ export interface RuntimeSettings {
 
 const DEFAULT_SETTINGS: RuntimeSettings = {
   wsPort: 8765,
-  asrProfile: "auto",
-  backend: "auto",
+  asrProfile: "parakeet",
+  backend: "sherpa_onnx",
   model: "",
   llmMode: "cleanup",
-  llmProvider: "openrouter",
+  llmProvider: "local",
   llmModel: "",
   llmFallback: "",
   deepseekApiKey: "",
@@ -124,8 +125,7 @@ function getInitialSettings(): RuntimeSettings {
 }
 
 function buildCliArgs(settings: RuntimeSettings): string[] {
-  const args: string[] = ["--json-mode", "--asr-profile", settings.asrProfile, "--llm-mode", settings.llmMode];
-  if (settings.backend !== "auto") args.push("--backend", settings.backend);
+  const args: string[] = ["--asr-profile", settings.asrProfile, "--llm-mode", settings.llmMode];
   if (settings.model.trim()) args.push("--model", settings.model.trim());
   if (settings.llmProvider !== "openrouter") args.push("--llm-provider", settings.llmProvider);
   if (settings.llmModel.trim()) args.push("--llm-model", settings.llmModel.trim());
@@ -145,7 +145,6 @@ function buildWsCommand(settings: RuntimeSettings): string {
     "--asr-profile", settings.asrProfile,
     "--llm-mode", settings.llmMode,
   ];
-  if (settings.backend !== "auto") args.push("--backend", settings.backend);
   if (settings.model.trim()) args.push("--model", settings.model.trim());
   if (settings.fastCommit) args.push("--fast-commit");
   if (settings.debug) args.push("--debug");
@@ -157,6 +156,33 @@ function detectRunMode(): RunMode {
     return "tauri";
   }
   return "ws";
+}
+
+// Push the selected local LLM to the Rust backend config. Tauri-only:
+// the IPC bridge doesn't exist in ws/browser mode, and failures must
+// not surface as unhandled rejections.
+function syncLocalLlmToRust(mode: RunMode, settings: RuntimeSettings, llmModel: string) {
+  if (mode !== "tauri") return;
+  void (async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("set_floure_config", {
+        config: {
+          asr_profile: settings.asrProfile === "auto" ? "Parakeet" : settings.asrProfile === "parakeet" ? "Parakeet" : settings.asrProfile === "whisper-turbo" ? "WhisperTurbo" : "WhisperBase",
+          language: settings.language || "en",
+          llm_provider: "Local",
+          llm_mode: settings.llmMode === "off" ? "Off" : settings.llmMode === "cleanup" ? "Cleanup" : settings.llmMode === "bullet_list" ? "BulletList" : settings.llmMode === "email" ? "Email" : "CommitMessage",
+          llm_model: llmModel,
+          typing_enabled: settings.typing,
+          clipboard_enabled: settings.clipboard,
+          dictation_mode: false,
+          hotkey: "ctrl+shift+s",
+        },
+      });
+    } catch (e) {
+      console.warn("[config] set_floure_config failed", e);
+    }
+  })();
 }
 
 function formatTimestamp(iso: string): string {
@@ -507,8 +533,9 @@ function ConfigView({
 
           {/* Connection */}
           <ConfigSection icon={PlugZap} title="Connection" subtitle="How Floure connects to the engine">
-            <SettingRow label="Mode">
+            <SettingRow label="Mode" htmlFor="cfg-mode">
               <FloureSelect
+                id="cfg-mode"
                 value={mode}
                 onChange={(e) => setMode(e.target.value as RunMode)}
               >
@@ -517,8 +544,9 @@ function ConfigView({
               </FloureSelect>
             </SettingRow>
             {mode === "ws" && (
-              <SettingRow label="Port">
+              <SettingRow label="Port" htmlFor="cfg-port">
                 <FloureInput
+                  id="cfg-port"
                   type="number"
                   value={settings.wsPort}
                   onChange={(e) => setSettings((s) => ({ ...s, wsPort: Number(e.target.value) || 8765 }))}
@@ -530,61 +558,100 @@ function ConfigView({
 
           {/* LLM Provider */}
           <ConfigSection icon={Settings2} title="LLM Provider" subtitle="API keys and model selection for post-processing">
-            <SettingRow label="Provider">
+            <SettingRow label="Provider" htmlFor="cfg-llm-provider">
               <FloureSelect
+                id="cfg-llm-provider"
                 value={settings.llmProvider}
-                onChange={(e) => setSettings((s) => ({ ...s, llmProvider: e.target.value as "deepseek" | "openrouter" }))}
+                onChange={(e) => {
+                  const provider = e.target.value as "local" | "deepseek" | "openrouter";
+                  setSettings((s) => ({ ...s, llmProvider: provider }));
+                  if (provider === "local") {
+                    // Sync the selected local model to Rust config.
+                    syncLocalLlmToRust(mode, settings, settings.llmModel || "s1-mini-q4_k_m");
+                  }
+                }}
                 maxWidth="max-w-[120px]"
               >
-                <option value="openrouter">OpenRouter</option>
+                <option value="local">Local</option>
                 <option value="deepseek">DeepSeek</option>
+                <option value="openrouter">OpenRouter</option>
               </FloureSelect>
             </SettingRow>
-            <SettingRow label="Model">
-              <FloureInput
-                value={settings.llmModel}
-                onChange={(e) => setSettings((s) => ({ ...s, llmModel: e.target.value }))}
-                placeholder={settings.llmProvider === "deepseek" ? "deepseek-chat" : "openai/gpt-4o-mini"}
-                maxWidth="max-w-[200px]"
-              />
-            </SettingRow>
-            <SettingRow label="Fallback">
-              <FloureInput
-                value={settings.llmFallback}
-                onChange={(e) => setSettings((s) => ({ ...s, llmFallback: e.target.value }))}
-                placeholder={settings.llmProvider === "openrouter" ? "anthropic/claude-3-5-haiku-latest" : ""}
-                maxWidth="max-w-[200px]"
-              />
-            </SettingRow>
 
-            <div className="h-px bg-border" />
+            {settings.llmProvider === "local" ? (
+              <SettingRow label="Model" htmlFor="cfg-local-model">
+                <FloureSelect
+                  id="cfg-local-model"
+                  value={settings.llmModel || "s1-mini-q4_k_m"}
+                  onChange={(e) => {
+                    const modelId = e.target.value;
+                    setSettings((s) => ({ ...s, llmModel: modelId }));
+                    syncLocalLlmToRust(mode, settings, modelId);
+                  }}
+                  maxWidth="max-w-[200px]"
+                >
+                  <option value="s1-mini-q4_k_m">S1-Mini (462 MB)</option>
+                  <option value="gemma-3-1b-it-q4_k_m">Gemma 3 1B (806 MB)</option>
+                </FloureSelect>
+              </SettingRow>
+            ) : (
+              <>
+                <SettingRow label="Model" htmlFor="cfg-llm-model">
+                  <FloureInput
+                    id="cfg-llm-model"
+                    value={settings.llmModel}
+                    onChange={(e) => setSettings((s) => ({ ...s, llmModel: e.target.value }))}
+                    placeholder={settings.llmProvider === "deepseek" ? "deepseek-chat" : "openai/gpt-4o-mini"}
+                    maxWidth="max-w-[200px]"
+                  />
+                </SettingRow>
+                <SettingRow label="Fallback" htmlFor="cfg-llm-fallback">
+                  <FloureInput
+                    id="cfg-llm-fallback"
+                    value={settings.llmFallback}
+                    onChange={(e) => setSettings((s) => ({ ...s, llmFallback: e.target.value }))}
+                    placeholder={settings.llmProvider === "openrouter" ? "anthropic/claude-3-5-haiku-latest" : ""}
+                    maxWidth="max-w-[200px]"
+                  />
+                </SettingRow>
+              </>
+            )}
 
-            <SettingRow label="DeepSeek Key">
-              <FloureInput
-                type="password"
-                value={settings.deepseekApiKey}
-                onChange={(e) => setSettings((s) => ({ ...s, deepseekApiKey: e.target.value }))}
-                placeholder="sk-..."
-                maxWidth="max-w-[200px]"
-                className="font-mono text-[11px]"
-              />
-            </SettingRow>
-            <SettingRow label="OpenRouter Key">
-              <FloureInput
-                type="password"
-                value={settings.openrouterApiKey}
-                onChange={(e) => setSettings((s) => ({ ...s, openrouterApiKey: e.target.value }))}
-                placeholder="sk-or-..."
-                maxWidth="max-w-[200px]"
-                className="font-mono text-[11px]"
-              />
-            </SettingRow>
+            {settings.llmProvider !== "local" && (
+              <>
+                <div className="h-px bg-border" />
+
+                <SettingRow label="DeepSeek Key" htmlFor="cfg-deepseek-key">
+                  <FloureInput
+                    id="cfg-deepseek-key"
+                    type="password"
+                    value={settings.deepseekApiKey}
+                    onChange={(e) => setSettings((s) => ({ ...s, deepseekApiKey: e.target.value }))}
+                    placeholder="sk-..."
+                    maxWidth="max-w-[200px]"
+                    className="font-mono text-[11px]"
+                  />
+                </SettingRow>
+                <SettingRow label="OpenRouter Key" htmlFor="cfg-openrouter-key">
+                  <FloureInput
+                    id="cfg-openrouter-key"
+                    type="password"
+                    value={settings.openrouterApiKey}
+                    onChange={(e) => setSettings((s) => ({ ...s, openrouterApiKey: e.target.value }))}
+                    placeholder="sk-or-..."
+                    maxWidth="max-w-[200px]"
+                    className="font-mono text-[11px]"
+                  />
+                </SettingRow>
+              </>
+            )}
           </ConfigSection>
 
           {/* Output */}
           <ConfigSection icon={Sparkles} title="Output" subtitle="How transcribed text is delivered">
-            <SettingRow label="LLM Mode">
+            <SettingRow label="LLM Mode" htmlFor="cfg-llm-mode">
               <FloureSelect
+                id="cfg-llm-mode"
                 value={settings.llmMode}
                 onChange={(e) => setSettings((s) => ({ ...s, llmMode: e.target.value as RuntimeSettings["llmMode"] }))}
               >
@@ -628,39 +695,38 @@ function ConfigView({
 
           {/* Speech Recognition */}
           <ConfigSection icon={Mic2} title="Speech Recognition" subtitle="ASR engine and model settings">
-            <SettingRow label="Profile">
-              <FloureSelect
+            <SettingRow label="Profile" htmlFor="cfg-asr-profile">
+               <FloureSelect
+                id="cfg-asr-profile"
                 value={settings.asrProfile}
                 onChange={(e) => setSettings((s) => ({ ...s, asrProfile: e.target.value as RuntimeSettings["asrProfile"] }))}
               >
-                <option value="auto">Auto</option>
-                <option value="speed">Speed</option>
-                <option value="balanced">Balanced</option>
-                <option value="accuracy">Accuracy</option>
-                <option value="distil">Distil</option>
-                <option value="turbo">Turbo</option>
+                <option value="parakeet">Parakeet TDT (English)</option>
+                <option value="whisper-turbo">Whisper large-v3-turbo (Multilingual)</option>
+                <option value="whisper-base">Whisper base (Lightweight)</option>
               </FloureSelect>
             </SettingRow>
-            <SettingRow label="Backend">
-              <FloureSelect
-                value={settings.backend}
-                onChange={(e) => setSettings((s) => ({ ...s, backend: e.target.value as RuntimeSettings["backend"] }))}
-              >
-                <option value="auto">Auto</option>
-                <option value="whisper_cpp">whisper.cpp</option>
-                <option value="faster_whisper">faster-whisper</option>
-              </FloureSelect>
-            </SettingRow>
-            <SettingRow label="Model">
+             <SettingRow label="Backend" htmlFor="cfg-backend">
+               <FloureSelect
+                 id="cfg-backend"
+                 value={settings.backend}
+                 onChange={(e) => setSettings((s) => ({ ...s, backend: e.target.value as RuntimeSettings["backend"] }))}
+               >
+                 <option value="sherpa_onnx">sherpa-onnx (Rust native)</option>
+               </FloureSelect>
+             </SettingRow>
+            <SettingRow label="Model" htmlFor="cfg-model">
               <FloureInput
+                id="cfg-model"
                 value={settings.model}
                 onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
                 placeholder="e.g. large-v3-turbo"
                 maxWidth="max-w-[180px]"
               />
             </SettingRow>
-            <SettingRow label="Language">
+            <SettingRow label="Language" htmlFor="cfg-language">
               <FloureSelect
+                id="cfg-language"
                 value={settings.language}
                 onChange={(e) => setSettings((s) => ({ ...s, language: e.target.value }))}
                 maxWidth="max-w-[140px]"
@@ -679,8 +745,9 @@ function ConfigView({
                 <option value="ru">Russian</option>
               </FloureSelect>
             </SettingRow>
-            <SettingRow label="Vocabulary">
+            <SettingRow label="Vocabulary" htmlFor="cfg-hotwords">
               <FloureInput
+                id="cfg-hotwords"
                 value={settings.hotwords}
                 onChange={(e) => setSettings((s) => ({ ...s, hotwords: e.target.value }))}
                 placeholder="Comma-separated"
@@ -692,7 +759,7 @@ function ConfigView({
           {/* Permissions */}
           <div
             ref={permissionsRef}
-            className={`rounded-[12px] transition-all duration-500 ${
+            className={`rounded-[12px] transition-all duration-200 ${
               highlightPermissions
                 ? "bg-[#FFE3E5] ring-2 ring-accent/40"
                 : ""
@@ -757,11 +824,11 @@ function ConfigView({
                   <Terminal size={11} />
                   Generated Command
                 </span>
-                <span className="text-[10px] text-text-disabled">
+                <span className="text-[11px] text-text-muted">
                   {mode === "ws" ? "restart backend to apply" : "applies on next start"}
                 </span>
               </div>
-              <code className="block text-[11px] text-accent-light font-mono leading-relaxed break-all">
+              <code className="block text-[11px] text-accent-active font-mono leading-relaxed break-all">
                 {commandPreview}
               </code>
             </div>
@@ -785,8 +852,6 @@ function App() {
   const [highlightPermissions, setHighlightPermissions] = useState(false);
   const [pttActive, setPttActive] = useState(false);
   const [resolvedModel, setResolvedModel] = useState<{ profile: string; model: string; backend: string; device: string } | null>(null);
-  const pttHwndRef = useRef<number | null>(null);  // Target HWND captured on PTT press
-  const pttTextRef = useRef<string>("");            // Latest transcription text for PTT commit
   const [view, setView] = useState<AppView>(
     localStorage.getItem("onboarding_completed") === "true" ? "main" : "onboarding"
   );
@@ -930,7 +995,7 @@ function App() {
       try {
         const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const win = getCurrentWindow();
-        const prefix = status === "idle" ? "○" : status === "listening" ? "🎙" : status === "transcribing" ? "✍" : "●";
+        const prefix = status === "idle" ? "[·]" : status === "listening" ? "[rec]" : status === "transcribing" ? "[tx]" : "[on]";
         await win.setTitle(`${prefix} STT — ${status}`);
       } catch { /* not in Tauri */ }
     })();
@@ -938,8 +1003,13 @@ function App() {
 
   useEffect(() => {
     try {
-      if (validateSettings(settings)) {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ ...settings, __version: SETTINGS_VERSION }));
+      // API keys stay in memory only — strip them before persisting so
+      // localStorage never holds secrets.
+      const { deepseekApiKey: _dk, openrouterApiKey: _ok, ...persisted } = settings;
+      void _dk;
+      void _ok;
+      if (validateSettings({ ...persisted, deepseekApiKey: "", openrouterApiKey: "" })) {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({ ...persisted, __version: SETTINGS_VERSION }));
       } else {
         console.error("Invalid settings, not saving to localStorage");
       }
@@ -991,7 +1061,6 @@ function App() {
     }
     if (event.type === "mic") {
       micLevelEmitter.emit(event.level);
-      // Forward mic level to widget
       (async () => {
         try {
           const { emit } = await import("@tauri-apps/api/event");
@@ -1000,48 +1069,63 @@ function App() {
       })();
       return;
     }
-    if (event.type === "error") {
-      setToast(event.message);
-      setStatus("error");
-      addError("general", event.message, true);
-      if (event.utterance_id) {
-        setLines((prev) => prev.map((line) =>
-          line.id === event.utterance_id ? { ...line, status: "error" } : line
-        ));
-      }
+    if (event.type === "asr_ready") {
+      setResolvedModel({ profile: "parakeet", model: "Parakeet TDT", backend: event.backend, device: "cuda" });
+      setToast("Engine ready — models loaded");
       return;
     }
-    if (event.type === "dropped") {
-      setToast(`Dropped (${event.reason})`);
+    if (event.type === "asr_partial") {
+      setStatus("transcribing");
+      const id = nextLocalId.current;
+      setLines((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.status === "transcribing") {
+          return [...prev.slice(0, -1), { ...last, raw: event.text }];
+        }
+        return [...prev, { id, raw: event.text, processed: "", status: "transcribing", createdAt: new Date().toISOString() }].slice(-500);
+      });
       return;
     }
-    if (event.type === "info") {
-      setResolvedModel({ profile: event.profile, model: event.model, backend: event.backend, device: event.device });
+    if (event.type === "asr_final") {
+      setLines((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.status === "transcribing") {
+          return [...prev.slice(0, -1), { ...last, raw: event.text, processed: event.text, status: "transcribing", createdAt: last.createdAt }];
+        }
+        return [...prev, { id: nextLocalId.current++, raw: event.text, processed: event.text, status: "transcribing", createdAt: new Date().toISOString() }].slice(-500);
+      });
       return;
     }
-    if (event.type === "raw") {
-      const id = event.utterance_id ?? nextLocalId.current++;
-      setLines((prev) => [
-        ...prev,
-        { id, raw: event.text, processed: "", status: "transcribing", createdAt: new Date().toISOString() },
-      ].slice(-500));
+    if (event.type === "llm_start") {
+      setLines((prev) => {
+        const last = prev[prev.length - 1];
+        if (last) {
+          return [...prev.slice(0, -1), { ...last, status: "rewriting" }];
+        }
+        return prev;
+      });
       return;
     }
-    if (event.type === "processed") {
-      const id = event.utterance_id;
-      if (!id) return;
-      setLines((prev) => prev.map((line) =>
-        line.id === id ? { ...line, processed: event.text, status: "done" } : line
-      ));
-      pttTextRef.current = event.text;
+    if (event.type === "llm_token") {
+      setLines((prev) => {
+        const last = prev[prev.length - 1];
+        if (last) {
+          const updatedProcessed = (last.processed || "") + event.text;
+          return [...prev.slice(0, -1), { ...last, processed: updatedProcessed, status: "rewriting" }];
+        }
+        return prev;
+      });
+      return;
     }
-    if (event.type === "llm_partial") {
-      const id = event.utterance_id;
-      if (!id) return;
-      setLines((prev) => prev.map((line) =>
-        line.id === id ? { ...line, processed: event.text, status: "rewriting" } : line
-      ));
-      pttTextRef.current = event.text;
+    if (event.type === "llm_end") {
+      setLines((prev) => {
+        const last = prev[prev.length - 1];
+        if (last) {
+          return [...prev.slice(0, -1), { ...last, processed: event.text, status: "done" }];
+        }
+        return prev;
+      });
+      return;
     }
   };
 
@@ -1062,16 +1146,7 @@ function App() {
       setToast("Engine not ready — wait a moment and try again");
       return;
     }
-    // Capture the foreground window BEFORE recording steals focus
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const hwnd = await invoke<number>("get_foreground_hwnd");
-      pttHwndRef.current = hwnd;
-      console.log(`[PTT] Captured HWND: ${hwnd} (source=${source})`);
-    } catch {
-      pttHwndRef.current = null;
-    }
-    pttTextRef.current = "";
+    // Backend handles typing directly — no need for frontend focus restore
     console.log(`[PTT] Start requested — source=${source}`);
     runtimeRef.current.start(); // Sends start_recording to backend
     setConnected(true);
@@ -1083,8 +1158,6 @@ function App() {
     if (!runtimeRef.current) return;
     isStartingRef.current = false;
     // Backend handles typing directly — no need for frontend type_text
-    pttHwndRef.current = null;
-    pttTextRef.current = "";
     console.log("[PTT] Stop requested");
     runtimeRef.current.stop(); // Sends stop_recording to backend
     setConnected(false);
@@ -1305,7 +1378,7 @@ function App() {
       </AppShell>
 
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-app-surface border border-border rounded-card text-[14px] text-text-primary shadow-lg animate-in fade-in slide-in-from-bottom-2">
+        <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-app-surface border border-border rounded-card text-[14px] text-text-primary shadow-lg animate-toast-in">
           {toast}
         </div>
       )}

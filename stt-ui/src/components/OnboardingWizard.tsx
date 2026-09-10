@@ -1,5 +1,17 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import {
+  CircleCheck,
+  TriangleAlert,
+  LoaderCircle,
+  CircleX,
+  Zap,
+  Star,
+  Check,
+  X,
+  ClipboardList,
+  Keyboard,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { MODEL_CATALOG } from "../store";
@@ -37,13 +49,21 @@ function Step1SystemCheck({ checks, onNext }: { checks: SystemCheck[]; onNext: (
             className={cn(
               "flex items-start gap-3 rounded-card px-4 py-3 border",
               check.status === "pass" && "bg-app-surface border-border",
-              check.status === "warning" && "bg-app-surface border-yellow-500/30",
+              check.status === "warning" && "bg-app-surface border-yellow-500/25",
               check.status === "pending" && "bg-app-surface border-border",
-              check.status === "fail" && "bg-app-surface border-red-500/30",
+              check.status === "fail" && "bg-app-surface border-red-500/20",
             )}
           >
-            <span className="shrink-0 mt-0.5">
-              {check.status === "pass" ? "✅" : check.status === "warning" ? "⚠️" : check.status === "pending" ? "⏳" : "❌"}
+            <span className="shrink-0 mt-0.5" aria-hidden="true">
+              {check.status === "pass" ? (
+                <CircleCheck size={18} className="text-green-600" />
+              ) : check.status === "warning" ? (
+                <TriangleAlert size={18} className="text-yellow-700" />
+              ) : check.status === "pending" ? (
+                <LoaderCircle size={18} className="text-text-muted animate-spin" />
+              ) : (
+                <CircleX size={18} className="text-red-600" />
+              )}
             </span>
             <div className="flex flex-col gap-0.5 text-left">
               <strong className="text-body text-text-primary">{check.name}</strong>
@@ -101,7 +121,11 @@ function Step2ModelDownload({
   const toggle = (name: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      next.has(name) ? next.delete(name) : next.add(name);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
       return next;
     });
   };
@@ -138,17 +162,17 @@ function Step2ModelDownload({
               <strong className="text-body text-text-primary">{model.name}</strong>
               <span className={cn(
                 "inline-flex items-center rounded-badge px-2 py-0.5 text-label font-semibold",
-                model.backend === "faster_whisper"
-                  ? "bg-accent-muted border border-accent-muted-border text-accent-light"
+                model.recommended
+                  ? "bg-accent-muted border border-accent-muted-border text-accent-active"
                   : "bg-app-surface border border-border text-text-secondary",
               )}>
-                {model.backend === "faster_whisper" ? "GPU" : "CPU"}
+                {model.profile}
               </span>
             </div>
             <div className="flex items-center gap-3 text-small text-text-muted">
               <span>{model.size}</span>
-              <span>{model.speed}</span>
-              <span>{model.accuracy}</span>
+              <span className="inline-flex items-center gap-1"><Zap size={11} aria-hidden="true" />{model.speed}</span>
+              <span className="inline-flex items-center gap-1"><Star size={11} aria-hidden="true" />{model.accuracy}</span>
             </div>
             <p className="text-small text-text-secondary">{model.bestFor}</p>
             {progress[model.name] && (
@@ -156,8 +180,8 @@ function Step2ModelDownload({
                 <div className="h-1.5 rounded-full bg-app-surface-secondary overflow-hidden">
                   <div className="h-full bg-accent rounded-full transition-[width] duration-150" style={{ width: `${progress[model.name].percent}%` }} />
                 </div>
-                <span className="text-small text-text-secondary">
-                  {progress[model.name].status === "done" ? "✓ Done" : `${progress[model.name].percent}%`}
+                <span className="text-small text-text-secondary inline-flex items-center gap-1">
+                  {progress[model.name].status === "done" ? (<><Check size={13} aria-hidden="true" /> Done</>) : `${progress[model.name].percent}%`}
                 </span>
               </div>
             )}
@@ -266,7 +290,7 @@ function Step4Permissions({
       <div className="w-full flex flex-col gap-3">
         <label className="flex items-center justify-between rounded-card bg-app-surface border border-border px-4 py-3 cursor-pointer">
           <div className="text-left">
-            <strong className="text-body text-text-primary">📋 Auto-copy to Clipboard</strong>
+            <strong className="text-body text-text-primary flex items-center gap-2"><ClipboardList size={16} className="text-text-secondary" />Auto-copy to Clipboard</strong>
             <p className="text-small text-text-muted">Uses {p.clipboardTool} on {p.platform}</p>
           </div>
           <span className="relative inline-flex h-5 w-9 items-center rounded-full bg-app-surface-secondary border border-border transition-colors">
@@ -282,7 +306,7 @@ function Step4Permissions({
 
         <label className="flex items-center justify-between rounded-card bg-app-surface border border-border px-4 py-3 cursor-pointer">
           <div className="text-left">
-            <strong className="text-body text-text-primary">⌨️ Type into Focused Window</strong>
+            <strong className="text-body text-text-primary flex items-center gap-2"><Keyboard size={16} className="text-text-secondary" />Type into Focused Window</strong>
             <p className="text-small text-text-muted">Uses {p.typingTool} on {p.platform}</p>
           </div>
           <span className="relative inline-flex h-5 w-9 items-center rounded-full bg-app-surface-secondary border border-border transition-colors">
@@ -316,7 +340,9 @@ function Step4Permissions({
 function Step5Ready({ onFinish }: { onFinish: () => void }) {
   return (
     <div className="flex flex-col items-center gap-6 text-center">
-      <div className="text-5xl">🎙️</div>
+      <div className="w-16 h-16 rounded-full bg-accent/10 flex items-center justify-center text-accent">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+      </div>
       <h2 className="text-heading text-text-primary">You're All Set!</h2>
       <p className="text-body text-text-secondary">Press <kbd className="inline-flex items-center rounded-badge px-2 py-0.5 text-label font-semibold bg-app-surface-secondary border border-border text-text-primary">Space</kbd> to start/stop dictation anytime.</p>
       <div className="w-full rounded-card bg-app-surface border border-border p-4 flex flex-col gap-2 text-left text-body text-text-secondary">
@@ -360,13 +386,14 @@ export default function OnboardingWizard({ onFinished }: Props) {
         <StepIndicator step={step} total={totalSteps} />
 
         {error && (
-          <div className="mb-4 flex items-center gap-2 rounded-card bg-red-900/20 border border-red-500/30 px-4 py-3 text-body text-red-400">
-            <span>⚠</span> {error}
+          <div className="mb-4 flex items-center gap-2 rounded-card bg-red-500/10 border border-red-500/20 px-4 py-3 text-body text-red-600">
+            <TriangleAlert size={16} className="shrink-0" /> {error}
             <button
-              className="ml-auto text-red-400 hover:text-red-300 text-lg leading-none transition-colors"
+              className="ml-auto text-red-600 hover:text-red-700 transition-colors flex items-center"
               onClick={() => dispatch({ type: "CLEAR_ERROR" })}
+              aria-label="Dismiss error"
             >
-              ×
+              <X size={16} />
             </button>
           </div>
         )}

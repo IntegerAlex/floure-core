@@ -25,15 +25,15 @@ export default function ModelBadge({ profile, resolvedModel }: ModelBadgeProps) 
   return (
     <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/60 border border-[rgba(44,37,32,0.06)] backdrop-blur-sm">
       <span className={info.color}>{info.icon}</span>
-      <span className="text-[10px] font-semibold text-text-primary tracking-wide uppercase">
+      <span className="text-[11px] font-semibold text-text-primary tracking-wide uppercase">
         {resolvedModel ? (PROFILE_INFO[resolvedProfile]?.label ?? resolvedProfile) : info.label}
       </span>
       <span className="w-px h-2.5 bg-[rgba(44,37,32,0.12)]" />
-      <span className="text-[10px] text-text-muted font-medium">{displayName}</span>
+      <span className="text-[11px] text-text-muted font-medium">{displayName}</span>
       {resolvedModel && (
         <>
           <span className="w-px h-2.5 bg-[rgba(44,37,32,0.12)]" />
-          <span className="text-[10px] text-text-muted font-medium">{deviceLabel}</span>
+          <span className="text-[11px] text-text-muted font-medium">{deviceLabel}</span>
         </>
       )}
     </div>

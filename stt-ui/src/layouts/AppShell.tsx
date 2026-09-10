@@ -71,18 +71,21 @@ export const AppShell = forwardRef<HTMLDivElement, AppShellProps>(
               <button
                 className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-border transition-colors"
                 onClick={() => win?.minimize()}
+                aria-label="Minimize window"
               >
                 <Minus size={16} className="text-text-secondary" />
               </button>
               <button
                 className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-border transition-colors"
                 onClick={() => win?.toggleMaximize()}
+                aria-label="Maximize or restore window"
               >
                 <Square size={14} className="text-text-secondary" />
               </button>
               <button
                 className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-border transition-colors"
                 onClick={() => win?.hide()}
+                aria-label="Hide window"
               >
                 <X size={16} className="text-text-secondary" />
               </button>

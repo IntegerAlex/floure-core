@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { Settings, X, Bot, KeyRound, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { RuntimeSettings } from "../App";
 
@@ -64,7 +65,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
     >
       <div className="bg-app-surface rounded-card border border-border w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden shadow-lg">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 className="text-heading text-text-primary">⚙ Settings</h2>
+          <h2 className="text-heading text-text-primary flex items-center gap-2"><Settings size={18} className="text-text-secondary" />Settings</h2>
           <button
             className={cn(
               "inline-flex items-center justify-center rounded-button h-8 px-3 text-small font-medium transition-all duration-200",
@@ -74,90 +75,110 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
             onClick={onClose}
             aria-label="Close settings"
           >
-            ✕ Close
+            <X size={14} /> Close
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-6">
           <div className="flex flex-col gap-3">
-            <h3 className="text-subheading text-text-primary">🤖 LLM Provider</h3>
+            <h3 className="text-subheading text-text-primary flex items-center gap-2"><Bot size={15} className="text-text-secondary" />LLM Provider</h3>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="settings-provider" className="text-label text-text-secondary">Provider</label>
               <select
                 id="settings-provider"
                 className={inputClass}
                 value={local.llmProvider}
-                onChange={(e) => update({ llmProvider: e.target.value as "deepseek" | "openrouter" })}
+                onChange={(e) => update({ llmProvider: e.target.value as "local" | "deepseek" | "openrouter" })}
               >
-                <option value="openrouter">OpenRouter</option>
+                <option value="local">Local</option>
                 <option value="deepseek">DeepSeek</option>
+                <option value="openrouter">OpenRouter</option>
               </select>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="settings-model" className="text-label text-text-secondary">Model</label>
-              <input
-                id="settings-model"
-                className={inputClass}
-                value={local.llmModel}
-                onChange={(e) => update({ llmModel: e.target.value })}
-                placeholder={local.llmProvider === "deepseek" ? "deepseek-chat" : "openai/gpt-4o-mini"}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="settings-fallback" className="text-label text-text-secondary">Fallback Model</label>
-              <input
-                id="settings-fallback"
-                className={inputClass}
-                value={local.llmFallback}
-                onChange={(e) => update({ llmFallback: e.target.value })}
-                placeholder={local.llmProvider === "openrouter" ? "anthropic/claude-3-5-haiku-latest" : ""}
-              />
-            </div>
+            {local.llmProvider === "local" ? (
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="settings-local-model" className="text-label text-text-secondary">Model</label>
+                <select
+                  id="settings-local-model"
+                  className={inputClass}
+                  value={local.llmModel || "s1-mini-q4_k_m"}
+                  onChange={(e) => update({ llmModel: e.target.value })}
+                >
+                  <option value="s1-mini-q4_k_m">S1-Mini (462 MB)</option>
+                  <option value="gemma-3-1b-it-q4_k_m">Gemma 3 1B (806 MB)</option>
+                </select>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="settings-model" className="text-label text-text-secondary">Model</label>
+                  <input
+                    id="settings-model"
+                    className={inputClass}
+                    value={local.llmModel}
+                    onChange={(e) => update({ llmModel: e.target.value })}
+                    placeholder={local.llmProvider === "deepseek" ? "deepseek-chat" : "openai/gpt-4o-mini"}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="settings-fallback" className="text-label text-text-secondary">Fallback Model</label>
+                  <input
+                    id="settings-fallback"
+                    className={inputClass}
+                    value={local.llmFallback}
+                    onChange={(e) => update({ llmFallback: e.target.value })}
+                    placeholder={local.llmProvider === "openrouter" ? "anthropic/claude-3-5-haiku-latest" : ""}
+                  />
+                </div>
+              </>
+            )}
           </div>
 
-          <div className="flex flex-col gap-3">
-            <h3 className="text-subheading text-text-primary">🔑 API Keys</h3>
-            <p className="text-small text-text-muted">Keys are passed directly to the engine process and never stored.</p>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="settings-deepseek-key" className="text-label text-text-secondary">DeepSeek API Key</label>
-              <input
-                id="settings-deepseek-key"
-                className={cn(inputClass, "font-mono")}
-                type={showKeys ? "text" : "password"}
-                value={local.deepseekApiKey}
-                onChange={(e) => update({ deepseekApiKey: e.target.value })}
-                placeholder={local.deepseekApiKey ? "••••••••" : "sk-..."}
-                autoComplete="off"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="settings-openrouter-key" className="text-label text-text-secondary">OpenRouter API Key</label>
-              <input
-                id="settings-openrouter-key"
-                className={cn(inputClass, "font-mono")}
-                type={showKeys ? "text" : "password"}
-                value={local.openrouterApiKey}
-                onChange={(e) => update({ openrouterApiKey: e.target.value })}
-                placeholder={local.openrouterApiKey ? "••••••••" : "sk-or-..."}
-                autoComplete="off"
-              />
-            </div>
-            <label className="flex items-center gap-2 text-body text-text-secondary cursor-pointer">
-              <span className="relative inline-flex h-5 w-9 items-center rounded-full bg-app-surface-secondary border border-border transition-colors">
+          {local.llmProvider !== "local" && (
+            <div className="flex flex-col gap-3">
+              <h3 className="text-subheading text-text-primary flex items-center gap-2"><KeyRound size={15} className="text-text-secondary" />API Keys</h3>
+              <p className="text-small text-text-muted">Keys stay in memory only and are never written to disk — re-enter them after a restart.</p>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="settings-deepseek-key" className="text-label text-text-secondary">DeepSeek API Key</label>
                 <input
-                  type="checkbox"
-                  checked={showKeys}
-                  onChange={(e) => setShowKeys(e.target.checked)}
-                  aria-label="Show API keys"
-                  className="sr-only peer"
+                  id="settings-deepseek-key"
+                  className={cn(inputClass, "font-mono")}
+                  type={showKeys ? "text" : "password"}
+                  value={local.deepseekApiKey}
+                  onChange={(e) => update({ deepseekApiKey: e.target.value })}
+                  placeholder={local.deepseekApiKey ? "••••••••" : "sk-..."}
+                  autoComplete="off"
                 />
-                <span className="inline-block h-3.5 w-3.5 rounded-full bg-text-muted transition-transform peer-checked:translate-x-4 peer-checked:bg-accent ml-0.5" />
-              </span>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="settings-openrouter-key" className="text-label text-text-secondary">OpenRouter API Key</label>
+                <input
+                  id="settings-openrouter-key"
+                  className={cn(inputClass, "font-mono")}
+                  type={showKeys ? "text" : "password"}
+                  value={local.openrouterApiKey}
+                  onChange={(e) => update({ openrouterApiKey: e.target.value })}
+                  placeholder={local.openrouterApiKey ? "••••••••" : "sk-or-..."}
+                  autoComplete="off"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-body text-text-secondary cursor-pointer">
+                <span className="relative inline-flex h-5 w-9 items-center rounded-full bg-app-surface-secondary border border-border transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={showKeys}
+                    onChange={(e) => setShowKeys(e.target.checked)}
+                    aria-label="Show API keys"
+                    className="sr-only peer"
+                  />
+                  <span className="inline-block h-3.5 w-3.5 rounded-full bg-text-muted transition-transform peer-checked:translate-x-4 peer-checked:bg-accent ml-0.5" />
+                </span>
               Show keys
             </label>
-          </div>
+            </div>
+          )}
 
           <div className="flex flex-col gap-3">
-            <h3 className="text-subheading text-text-primary">🎤 Speech Recognition</h3>
+            <h3 className="text-subheading text-text-primary flex items-center gap-2"><Mic size={15} className="text-text-secondary" />Speech Recognition</h3>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="settings-hotkey" className="text-label text-text-secondary">Push-to-Talk Hotkey</label>
               <select

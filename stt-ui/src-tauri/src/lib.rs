@@ -1,7 +1,20 @@
+mod audio;
+mod compute;
+mod config;
+mod llm;
+mod models;
+mod output;
+mod parakeet;
+mod pipeline;
+mod vad;
+mod whisper;
 mod widget;
 #[cfg(test)]
 mod tests;
 
+use crate::config::AppConfig;
+use crate::models::ModelManager;
+use crate::models::ModelStatus;
 use rusqlite::Connection;
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -38,19 +51,6 @@ impl serde::Serialize for AppError {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
-struct TranscriptRow {
-    id: i64,
-    raw_text: String,
-    processed_text: String,
-    language: String,
-    mode: String,
-    model: String,
-    duration_sec: f64,
-    favorite: i64,
-    created_at: String,
-}
-
-#[derive(Debug, Serialize)]
 struct DictionaryEntry {
     id: i64,
     phrase: String,
@@ -64,21 +64,25 @@ struct DictionaryEntry {
     updated_at: String,
 }
 
+#[derive(Debug, Serialize)]
+struct TranscriptRow {
+    id: i64,
+    raw_text: String,
+    processed_text: String,
+    language: String,
+    mode: String,
+    model: String,
+    duration_sec: f64,
+    favorite: i64,
+    created_at: String,
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
 fn history_db_path() -> Result<std::path::PathBuf, AppError> {
-    // Support STT_DATA_DIR env var for consistent path with Python backend
-    let base = if let Ok(data_dir) = std::env::var("STT_DATA_DIR") {
-        std::path::PathBuf::from(data_dir)
-    } else {
-        let home = dirs_next::home_dir().ok_or_else(|| {
-            AppError::Io(std::io::Error::other("Could not determine home directory"))
-        })?;
-        home.join(".local/share/stt")
-    };
-    Ok(base.join("history.db"))
+    Ok(crate::config::history_db_path())
 }
 
 #[tauri::command]
@@ -111,8 +115,38 @@ async fn get_history(limit: usize) -> Result<Vec<TranscriptRow>, AppError> {
     Ok(rows)
 }
 
+#[tauri::command]
+async fn delete_history_entry(id: i64) -> Result<bool, AppError> {
+    let db_path = history_db_path()?;
+    let ok = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        let deleted = conn.execute("DELETE FROM transcripts WHERE id = ?1", [id])?;
+        Ok::<bool, AppError>(deleted > 0)
+    })
+    .await??;
+    Ok(ok)
+}
+
+#[tauri::command]
+async fn toggle_history_favorite(id: i64) -> Result<i64, AppError> {
+    let db_path = history_db_path()?;
+    // Single statement so concurrent toggles can't both read the same
+    // value and lose an update.
+    let new_val = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        let new_val: i64 = conn.query_row(
+            "UPDATE transcripts SET favorite = 1 - favorite WHERE id = ?1 RETURNING favorite",
+            [id],
+            |row| row.get(0),
+        )?;
+        Ok::<i64, AppError>(new_val)
+    })
+    .await??;
+    Ok(new_val)
+}
+
 // ---------------------------------------------------------------------------
-// Insights types & command
+// Insights types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -170,6 +204,319 @@ struct VoiceIntelligenceData {
     peak_voice_usage: String,
     per_utterance: String,
     language_percentage: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Dictionary commands
+// ---------------------------------------------------------------------------
+
+fn ensure_dict_table(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS dictionary_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phrase TEXT NOT NULL UNIQUE,
+            replacement TEXT NOT NULL,
+            category TEXT DEFAULT 'custom',
+            notes TEXT DEFAULT '',
+            use_count INTEGER DEFAULT 0,
+            is_favorite INTEGER DEFAULT 0,
+            auto_learned INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );",
+    )
+}
+
+#[tauri::command]
+async fn get_dictionary(
+    search: Option<String>,
+    category: Option<String>,
+    favorite: Option<bool>,
+) -> Result<Vec<DictionaryEntry>, AppError> {
+    let db_path = history_db_path()?;
+    let rows = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        ensure_dict_table(&conn)?;
+
+        let sql = "SELECT id, phrase, replacement, category, notes, use_count, is_favorite, auto_learned, created_at, updated_at
+             FROM dictionary_entries ORDER BY is_favorite DESC, updated_at DESC";
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(DictionaryEntry {
+                    id: row.get(0)?,
+                    phrase: row.get(1)?,
+                    replacement: row.get(2)?,
+                    category: row.get(3)?,
+                    notes: row.get(4)?,
+                    use_count: row.get(5)?,
+                    is_favorite: row.get::<_, i64>(6)? != 0,
+                    auto_learned: row.get::<_, i64>(7)? != 0,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Filter in-memory (simpler than dynamic SQL on rusqlite)
+        let rows: Vec<DictionaryEntry> = rows.into_iter()
+            .filter(|r| {
+                if let Some(ref s) = search {
+                    if !s.trim().is_empty() && !r.phrase.to_lowercase().contains(&s.trim().to_lowercase()) {
+                        return false;
+                    }
+                }
+                if let Some(ref cat) = category {
+                    if !cat.trim().is_empty() && r.category != cat.trim() {
+                        return false;
+                    }
+                }
+                if favorite.unwrap_or(false) && !r.is_favorite {
+                    return false;
+                }
+                true
+            })
+            .collect();
+
+        Ok::<Vec<DictionaryEntry>, AppError>(rows)
+    })
+    .await??;
+    Ok(rows)
+}
+
+#[tauri::command]
+async fn add_dictionary_entry(
+    phrase: String,
+    replacement: String,
+    category: Option<String>,
+    notes: Option<String>,
+) -> Result<Option<DictionaryEntry>, AppError> {
+    let db_path = history_db_path()?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        ensure_dict_table(&conn)?;
+
+        let phrase = phrase.trim();
+        let replacement = replacement.trim();
+        if phrase.is_empty() || replacement.is_empty() || phrase.len() > 60 || replacement.len() > 60 {
+            return Ok::<Option<DictionaryEntry>, AppError>(None);
+        }
+
+        let cat = category.unwrap_or_else(|| "custom".into());
+        let nts = notes.unwrap_or_default();
+
+        conn.execute(
+            "INSERT OR IGNORE INTO dictionary_entries (phrase, replacement, category, notes) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![phrase, replacement, cat, nts],
+        )?;
+
+        let last_id = conn.last_insert_rowid();
+        if last_id == 0 {
+            return Ok(None);
+        }
+
+        let mut stmt = conn.prepare(
+            "SELECT id, phrase, replacement, category, notes, use_count, is_favorite, auto_learned, created_at, updated_at
+             FROM dictionary_entries WHERE id = ?1",
+        )?;
+        let entry = stmt.query_row([last_id], |row| {
+            Ok(DictionaryEntry {
+                id: row.get(0)?,
+                phrase: row.get(1)?,
+                replacement: row.get(2)?,
+                category: row.get(3)?,
+                notes: row.get(4)?,
+                use_count: row.get(5)?,
+                is_favorite: row.get::<_, i64>(6)? != 0,
+                auto_learned: row.get::<_, i64>(7)? != 0,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        })?;
+        Ok(Some(entry))
+    })
+    .await??;
+    Ok(result)
+}
+
+#[tauri::command]
+async fn update_dictionary_entry(
+    id: i64,
+    phrase: Option<String>,
+    replacement: Option<String>,
+    category: Option<String>,
+    notes: Option<String>,
+) -> Result<Option<DictionaryEntry>, AppError> {
+    let db_path = history_db_path()?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        ensure_dict_table(&conn)?;
+
+        if let Some(ref p) = phrase {
+            if !p.trim().is_empty() && p.trim().len() <= 60 {
+                conn.execute("UPDATE dictionary_entries SET phrase = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                    rusqlite::params![p.trim(), id])?;
+            }
+        }
+        if let Some(ref r) = replacement {
+            if !r.trim().is_empty() && r.trim().len() <= 60 {
+                conn.execute("UPDATE dictionary_entries SET replacement = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                    rusqlite::params![r.trim(), id])?;
+            }
+        }
+        if let Some(ref cat) = category {
+            if !cat.trim().is_empty() {
+                conn.execute("UPDATE dictionary_entries SET category = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                    rusqlite::params![cat, id])?;
+            }
+        }
+        if let Some(ref n) = notes {
+            conn.execute("UPDATE dictionary_entries SET notes = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                rusqlite::params![n, id])?;
+        }
+
+        let mut stmt = conn.prepare(
+            "SELECT id, phrase, replacement, category, notes, use_count, is_favorite, auto_learned, created_at, updated_at
+             FROM dictionary_entries WHERE id = ?1",
+        )?;
+        let entry = stmt.query_row([id], |row| {
+            Ok(DictionaryEntry {
+                id: row.get(0)?,
+                phrase: row.get(1)?,
+                replacement: row.get(2)?,
+                category: row.get(3)?,
+                notes: row.get(4)?,
+                use_count: row.get(5)?,
+                is_favorite: row.get::<_, i64>(6)? != 0,
+                auto_learned: row.get::<_, i64>(7)? != 0,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        })?;
+        Ok::<Option<DictionaryEntry>, AppError>(Some(entry))
+    })
+    .await??;
+    Ok(result)
+}
+
+#[tauri::command]
+async fn delete_dictionary_entry(id: i64) -> Result<bool, AppError> {
+    let db_path = history_db_path()?;
+    let ok = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        ensure_dict_table(&conn)?;
+        conn.execute("DELETE FROM dictionary_entries WHERE id = ?1", [id])?;
+        Ok::<bool, AppError>(true)
+    })
+    .await??;
+    Ok(ok)
+}
+
+#[tauri::command]
+async fn toggle_dictionary_favorite(id: i64) -> Result<Option<bool>, AppError> {
+    let db_path = history_db_path()?;
+    // Single statement so concurrent toggles can't both read the same
+    // value and lose an update.
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        ensure_dict_table(&conn)?;
+
+        let new_val: i64 = conn.query_row(
+            "UPDATE dictionary_entries SET is_favorite = 1 - is_favorite, updated_at = CURRENT_TIMESTAMP WHERE id = ?1 RETURNING is_favorite",
+            [id],
+            |row| row.get(0),
+        )?;
+        Ok::<Option<bool>, AppError>(Some(new_val != 0))
+    })
+    .await??;
+    Ok(result)
+}
+
+#[tauri::command]
+async fn import_dictionary_csv(csv_text: String) -> Result<serde_json::Value, AppError> {
+    let db_path = history_db_path()?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        ensure_dict_table(&conn)?;
+
+        let mut imported: u32 = 0;
+        let mut skipped: u32 = 0;
+
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .flexible(true)
+            .from_reader(csv_text.as_bytes());
+
+        for record in reader.records() {
+            if imported >= 1000 {
+                skipped += 1;
+                continue;
+            }
+            let row = match record {
+                Ok(r) => r,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let fields: Vec<&str> = row.iter().collect();
+            if fields.is_empty() || fields.iter().all(|f| f.trim().is_empty()) {
+                continue;
+            }
+            let phrase = fields[0].trim();
+            let replacement = if fields.len() >= 2 { fields[1].trim() } else { phrase };
+
+            if phrase.is_empty() || replacement.is_empty() || phrase.len() > 60 || replacement.len() > 60 {
+                skipped += 1;
+                continue;
+            }
+
+            match conn.execute(
+                "INSERT OR IGNORE INTO dictionary_entries (phrase, replacement) VALUES (?1, ?2)",
+                rusqlite::params![phrase, replacement],
+            ) {
+                Ok(1) => imported += 1,
+                _ => skipped += 1,
+            }
+        }
+
+        Ok::<serde_json::Value, AppError>(serde_json::json!({
+            "imported": imported,
+            "skipped": skipped,
+        }))
+    })
+    .await??;
+    Ok(result)
+}
+
+#[tauri::command]
+async fn export_dictionary_csv() -> Result<serde_json::Value, AppError> {
+    let db_path = history_db_path()?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(db_path)?;
+        ensure_dict_table(&conn)?;
+
+        let mut stmt = conn.prepare(
+            "SELECT phrase, replacement FROM dictionary_entries ORDER BY is_favorite DESC, updated_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        let mut csv_lines = vec!["phrase,replacement".to_string()];
+        for row in rows {
+            let (phrase, replacement) = row?;
+            let escaped_p = phrase.replace('"', "\"\"");
+            let escaped_r = replacement.replace('"', "\"\"");
+            csv_lines.push(format!("\"{}\",\"{}\"", escaped_p, escaped_r));
+        }
+
+        Ok::<serde_json::Value, AppError>(serde_json::json!({
+            "csv": csv_lines.join("\n"),
+        }))
+    })
+    .await??;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -532,384 +879,55 @@ async fn get_voice_intelligence() -> Result<VoiceIntelligenceData, AppError> {
     Ok(data)
 }
 
-// ---------------------------------------------------------------------------
-// Dictionary commands
-// ---------------------------------------------------------------------------
-
-fn ensure_dict_table(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS dictionary_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            phrase TEXT NOT NULL UNIQUE,
-            replacement TEXT NOT NULL,
-            category TEXT DEFAULT 'custom',
-            notes TEXT DEFAULT '',
-            use_count INTEGER DEFAULT 0,
-            is_favorite INTEGER DEFAULT 0,
-            auto_learned INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );",
-    )
+#[tauri::command]
+fn start_listening(app: tauri::AppHandle) -> Result<(), String> {
+    eprintln!("[backend] start_listening invoked");
+    let config = AppConfig::load();
+    let result = crate::pipeline::start_pipeline(app, config);
+    match &result {
+        Ok(_) => eprintln!("[backend] start_listening OK"),
+        Err(e) => eprintln!("[backend] start_listening FAILED: {}", e),
+    }
+    result.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn get_dictionary(
-    search: Option<String>,
-    category: Option<String>,
-    favorite: Option<bool>,
-) -> Result<Vec<DictionaryEntry>, AppError> {
-    let db_path = history_db_path()?;
-    let rows = tauri::async_runtime::spawn_blocking(move || {
-        let conn = Connection::open(db_path)?;
-        ensure_dict_table(&conn)?;
-
-        let sql = "SELECT id, phrase, replacement, category, notes, use_count, is_favorite, auto_learned, created_at, updated_at
-             FROM dictionary_entries ORDER BY is_favorite DESC, updated_at DESC";
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(DictionaryEntry {
-                    id: row.get(0)?,
-                    phrase: row.get(1)?,
-                    replacement: row.get(2)?,
-                    category: row.get(3)?,
-                    notes: row.get(4)?,
-                    use_count: row.get(5)?,
-                    is_favorite: row.get::<_, i64>(6)? != 0,
-                    auto_learned: row.get::<_, i64>(7)? != 0,
-                    created_at: row.get(8)?,
-                    updated_at: row.get(9)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        // Filter in-memory (simpler than dynamic SQL on rusqlite)
-        let rows: Vec<DictionaryEntry> = rows.into_iter()
-            .filter(|r| {
-                if let Some(ref s) = search {
-                    if !s.trim().is_empty() && !r.phrase.to_lowercase().contains(&s.trim().to_lowercase()) {
-                        return false;
-                    }
-                }
-                if let Some(ref cat) = category {
-                    if !cat.trim().is_empty() && r.category != cat.trim() {
-                        return false;
-                    }
-                }
-                if favorite.unwrap_or(false) && !r.is_favorite {
-                    return false;
-                }
-                true
-            })
-            .collect();
-
-        Ok::<Vec<DictionaryEntry>, AppError>(rows)
-    })
-    .await??;
-    Ok(rows)
-}
-
-#[tauri::command]
-async fn add_dictionary_entry(
-    phrase: String,
-    replacement: String,
-    category: Option<String>,
-    notes: Option<String>,
-) -> Result<Option<DictionaryEntry>, AppError> {
-    let db_path = history_db_path()?;
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let conn = Connection::open(db_path)?;
-        ensure_dict_table(&conn)?;
-
-        let phrase = phrase.trim();
-        let replacement = replacement.trim();
-        if phrase.is_empty() || replacement.is_empty() || phrase.len() > 60 || replacement.len() > 60 {
-            return Ok::<Option<DictionaryEntry>, AppError>(None);
-        }
-
-        let cat = category.unwrap_or_else(|| "custom".into());
-        let nts = notes.unwrap_or_default();
-
-        conn.execute(
-            "INSERT OR IGNORE INTO dictionary_entries (phrase, replacement, category, notes) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![phrase, replacement, cat, nts],
-        )?;
-
-        let last_id = conn.last_insert_rowid();
-        if last_id == 0 {
-            return Ok(None);
-        }
-
-        let mut stmt = conn.prepare(
-            "SELECT id, phrase, replacement, category, notes, use_count, is_favorite, auto_learned, created_at, updated_at
-             FROM dictionary_entries WHERE id = ?1",
-        )?;
-        let entry = stmt.query_row([last_id], |row| {
-            Ok(DictionaryEntry {
-                id: row.get(0)?,
-                phrase: row.get(1)?,
-                replacement: row.get(2)?,
-                category: row.get(3)?,
-                notes: row.get(4)?,
-                use_count: row.get(5)?,
-                is_favorite: row.get::<_, i64>(6)? != 0,
-                auto_learned: row.get::<_, i64>(7)? != 0,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
-            })
-        })?;
-        Ok(Some(entry))
-    })
-    .await??;
-    Ok(result)
-}
-
-#[tauri::command]
-async fn update_dictionary_entry(
-    id: i64,
-    phrase: Option<String>,
-    replacement: Option<String>,
-    category: Option<String>,
-    notes: Option<String>,
-) -> Result<Option<DictionaryEntry>, AppError> {
-    let db_path = history_db_path()?;
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let conn = Connection::open(db_path)?;
-        ensure_dict_table(&conn)?;
-
-        if let Some(ref p) = phrase {
-            if !p.trim().is_empty() && p.trim().len() <= 60 {
-                conn.execute("UPDATE dictionary_entries SET phrase = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-                    rusqlite::params![p.trim(), id])?;
-            }
-        }
-        if let Some(ref r) = replacement {
-            if !r.trim().is_empty() && r.trim().len() <= 60 {
-                conn.execute("UPDATE dictionary_entries SET replacement = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-                    rusqlite::params![r.trim(), id])?;
-            }
-        }
-        if let Some(ref cat) = category {
-            if !cat.trim().is_empty() {
-                conn.execute("UPDATE dictionary_entries SET category = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-                    rusqlite::params![cat, id])?;
-            }
-        }
-        if let Some(ref n) = notes {
-            conn.execute("UPDATE dictionary_entries SET notes = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-                rusqlite::params![n, id])?;
-        }
-
-        let mut stmt = conn.prepare(
-            "SELECT id, phrase, replacement, category, notes, use_count, is_favorite, auto_learned, created_at, updated_at
-             FROM dictionary_entries WHERE id = ?1",
-        )?;
-        let entry = stmt.query_row([id], |row| {
-            Ok(DictionaryEntry {
-                id: row.get(0)?,
-                phrase: row.get(1)?,
-                replacement: row.get(2)?,
-                category: row.get(3)?,
-                notes: row.get(4)?,
-                use_count: row.get(5)?,
-                is_favorite: row.get::<_, i64>(6)? != 0,
-                auto_learned: row.get::<_, i64>(7)? != 0,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
-            })
-        })?;
-        Ok::<Option<DictionaryEntry>, AppError>(Some(entry))
-    })
-    .await??;
-    Ok(result)
-}
-
-#[tauri::command]
-async fn delete_dictionary_entry(id: i64) -> Result<bool, AppError> {
-    let db_path = history_db_path()?;
-    let ok = tauri::async_runtime::spawn_blocking(move || {
-        let conn = Connection::open(db_path)?;
-        ensure_dict_table(&conn)?;
-        conn.execute("DELETE FROM dictionary_entries WHERE id = ?1", [id])?;
-        Ok::<bool, AppError>(true)
-    })
-    .await??;
-    Ok(ok)
-}
-
-#[tauri::command]
-async fn toggle_dictionary_favorite(id: i64) -> Result<Option<bool>, AppError> {
-    let db_path = history_db_path()?;
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let conn = Connection::open(db_path)?;
-        ensure_dict_table(&conn)?;
-
-        let current: i64 = conn.query_row(
-            "SELECT is_favorite FROM dictionary_entries WHERE id = ?1",
-            [id],
-            |row| row.get(0),
-        )?;
-        let new_val = if current != 0 { 0 } else { 1 };
-        conn.execute(
-            "UPDATE dictionary_entries SET is_favorite = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            rusqlite::params![new_val, id],
-        )?;
-        Ok::<Option<bool>, AppError>(Some(new_val != 0))
-    })
-    .await??;
-    Ok(result)
-}
-
-#[tauri::command]
-async fn import_dictionary_csv(csv_text: String) -> Result<serde_json::Value, AppError> {
-    let db_path = history_db_path()?;
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let conn = Connection::open(db_path)?;
-        ensure_dict_table(&conn)?;
-
-        let mut imported: u32 = 0;
-        let mut skipped: u32 = 0;
-
-        let mut reader = csv::ReaderBuilder::new()
-            .has_headers(false)
-            .flexible(true)
-            .from_reader(csv_text.as_bytes());
-
-        for record in reader.records() {
-            if imported >= 1000 {
-                skipped += 1;
-                continue;
-            }
-            let row = match record {
-                Ok(r) => r,
-                Err(_) => {
-                    skipped += 1;
-                    continue;
-                }
-            };
-            let fields: Vec<&str> = row.iter().collect();
-            if fields.is_empty() || fields.iter().all(|f| f.trim().is_empty()) {
-                continue;
-            }
-            let phrase = fields[0].trim();
-            let replacement = if fields.len() >= 2 { fields[1].trim() } else { phrase };
-
-            if phrase.is_empty() || replacement.is_empty() || phrase.len() > 60 || replacement.len() > 60 {
-                skipped += 1;
-                continue;
-            }
-
-            match conn.execute(
-                "INSERT OR IGNORE INTO dictionary_entries (phrase, replacement) VALUES (?1, ?2)",
-                rusqlite::params![phrase, replacement],
-            ) {
-                Ok(1) => imported += 1,
-                _ => skipped += 1,
-            }
-        }
-
-        Ok::<serde_json::Value, AppError>(serde_json::json!({
-            "imported": imported,
-            "skipped": skipped,
-        }))
-    })
-    .await??;
-    Ok(result)
-}
-
-#[tauri::command]
-async fn export_dictionary_csv() -> Result<serde_json::Value, AppError> {
-    let db_path = history_db_path()?;
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let conn = Connection::open(db_path)?;
-        ensure_dict_table(&conn)?;
-
-        let mut stmt = conn.prepare(
-            "SELECT phrase, replacement FROM dictionary_entries ORDER BY is_favorite DESC, updated_at DESC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        let mut csv_lines = vec!["phrase,replacement".to_string()];
-        for row in rows {
-            let (phrase, replacement) = row?;
-            let escaped_p = phrase.replace('"', "\"\"");
-            let escaped_r = replacement.replace('"', "\"\"");
-            csv_lines.push(format!("\"{}\",\"{}\"", escaped_p, escaped_r));
-        }
-
-        Ok::<serde_json::Value, AppError>(serde_json::json!({
-            "csv": csv_lines.join("\n"),
-        }))
-    })
-    .await??;
-    Ok(result)
-}
-
-#[derive(Debug, Serialize)]
-struct ModelStatus {
-    name: String,
-    downloaded: bool,
-    path: String,
-    size_bytes: u64,
+fn stop_listening() {
+    crate::pipeline::stop_pipeline();
 }
 
 #[tauri::command]
 fn check_model_status() -> Result<Vec<ModelStatus>, AppError> {
-    let home = dirs_next::home_dir().ok_or_else(|| {
-        AppError::Io(std::io::Error::other("Could not determine home directory"))
-    })?;
+    let config = AppConfig::load();
+    let manager = ModelManager::new(config.model_dir);
+    Ok(manager.status())
+}
 
-    let mut statuses = Vec::new();
+#[tauri::command]
+async fn download_model(id: String) -> Result<(), AppError> {
+    let config = AppConfig::load();
+    let manager = ModelManager::new(config.model_dir);
+    tauri::async_runtime::spawn(async move {
+        let _ = manager.download(&id, |_percent, _bytes| {}).await;
+    });
+    Ok(())
+}
 
-    // whisper.cpp models: ~/.local/share/pywhispercpp/models/ggml-{name}.bin
-    let cpp_dir = home.join(".local/share/pywhispercpp/models");
-    for name in &["tiny.en", "base.en", "small.en"] {
-        let path = cpp_dir.join(format!("ggml-{}.bin", name));
-        let (downloaded, size_bytes) = if path.exists() {
-            let meta = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            (true, meta)
-        } else {
-            (false, 0)
-        };
-        statuses.push(ModelStatus {
-            name: name.to_string(),
-            downloaded,
-            path: path.to_string_lossy().to_string(),
-            size_bytes,
-        });
-    }
+#[tauri::command]
+async fn get_available_mics() -> Result<Vec<(String, String)>, String> {
+    crate::audio::list_input_devices()
+        .map_err(|e| e.to_string())
+}
 
-    // faster-whisper models: ~/.cache/huggingface/hub/models--{org}--{repo}/
-    let hf_dir = home.join(".cache/huggingface/hub");
-    let fw_models: Vec<(&str, &str, &str)> = vec![
-        ("tiny.en", "Systran", "faster-whisper-tiny"),
-        ("base.en", "Systran", "faster-whisper-base"),
-        ("small.en", "Systran", "faster-whisper-small"),
-        ("distil-large-v3", "Systran", "faster-distil-whisper-large-v3"),
-        ("large-v3-turbo", "mobiuslabsgmbh", "faster-whisper-large-v3-turbo"),
-    ];
 
-    for (name, org, repo) in &fw_models {
-        let model_dir = hf_dir.join(format!("models--{}--{}", org, repo));
-        let (downloaded, size_bytes) = if model_dir.exists() {
-            // Walk the directory to sum file sizes
-            let total = walk_dir_size(&model_dir).unwrap_or(0);
-            (total > 0, total)
-        } else {
-            (false, 0)
-        };
-        statuses.push(ModelStatus {
-            name: name.to_string(),
-            downloaded,
-            path: model_dir.to_string_lossy().to_string(),
-            size_bytes,
-        });
-    }
+#[tauri::command]
+async fn get_floure_config() -> Result<AppConfig, String> {
+    Ok(AppConfig::load())
+}
 
-    Ok(statuses)
+#[tauri::command]
+async fn set_floure_config(config: AppConfig) -> Result<(), String> {
+    config.save().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -921,22 +939,6 @@ fn delete_model_file(path: String) -> Result<(), AppError> {
         std::fs::remove_file(p).map_err(AppError::Io)?;
     }
     Ok(())
-}
-
-fn walk_dir_size(path: &std::path::Path) -> Result<u64, AppError> {
-    let mut total = 0u64;
-    if path.is_dir() {
-        for entry in std::fs::read_dir(path).map_err(AppError::Io)? {
-            let entry = entry.map_err(AppError::Io)?;
-            let meta = entry.metadata().map_err(AppError::Io)?;
-            if meta.is_file() {
-                total += meta.len();
-            } else if meta.is_dir() {
-                total += walk_dir_size(&entry.path())?;
-            }
-        }
-    }
-    Ok(total)
 }
 
 // ---------------------------------------------------------------------------
@@ -952,22 +954,7 @@ mod win32 {
         fn GetWindowThreadProcessId(hWnd: HWND, lpdwProcessId: *mut u32) -> u32;
         fn GetCurrentThreadId() -> u32;
         fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
-        fn keybd_event(bVk: u8, bScan: u8, dwFlags: u32, dwExtraInfo: usize);
-        fn SetClipboardData(uFormat: u32, hMem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-        fn OpenClipboard(hWndNewOwner: HWND) -> i32;
-        fn EmptyClipboard() -> i32;
-        fn CloseClipboard() -> i32;
-        fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> *mut core::ffi::c_void;
-        fn GlobalLock(hMem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-        fn GlobalUnlock(hMem: *mut core::ffi::c_void) -> i32;
-        fn lstrcpyW(lpString1: *mut u16, lpString2: *const u16) -> *mut u16;
     }
-
-    const KEYEVENTF_KEYUP: u32 = 0x0002;
-    const VK_CONTROL: u8 = 0x11;
-    const VK_V: u8 = 0x56;
-    const CF_UNICODETEXT: u32 = 13;
-    const GMEM_MOVEABLE: u32 = 0x0002;
 
     /// Get the current foreground window handle as a number.
     pub fn get_foreground_hwnd() -> u64 {
@@ -994,44 +981,6 @@ mod win32 {
             let ok = SetForegroundWindow(target) != 0;
             AttachThreadInput(current_tid, target_tid, 0);
             ok
-        }
-    }
-
-    /// Set clipboard content using raw Win32 API (no PowerShell needed).
-    pub fn set_clipboard(text: &str) -> bool {
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let byte_len = wide.len() * 2;
-        unsafe {
-            if OpenClipboard(std::ptr::null_mut()) == 0 {
-                return false;
-            }
-            EmptyClipboard();
-            let h_mem = GlobalAlloc(GMEM_MOVEABLE, byte_len);
-            if h_mem.is_null() {
-                CloseClipboard();
-                return false;
-            }
-            let ptr = GlobalLock(h_mem) as *mut u16;
-            if ptr.is_null() {
-                CloseClipboard();
-                return false;
-            }
-            lstrcpyW(ptr, wide.as_ptr());
-            GlobalUnlock(h_mem);
-            SetClipboardData(CF_UNICODETEXT, h_mem);
-            CloseClipboard();
-        }
-        true
-    }
-
-    /// Send Ctrl+V using keybd_event — works from any GUI process with an
-    /// active message loop (the Tauri app main thread).
-    pub fn send_ctrl_v() {
-        unsafe {
-            keybd_event(VK_CONTROL, 0, 0, 0);
-            keybd_event(VK_V, 0, 0, 0);
-            keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0);
-            keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
         }
     }
 }
@@ -1077,48 +1026,6 @@ mod win32 {
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
-
-    /// Set clipboard content on Linux using wl-copy (Wayland) or xclip (X11).
-    pub fn set_clipboard(text: &str) -> bool {
-        let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-        if is_wayland {
-            return std::process::Command::new("wl-copy")
-                .arg(text)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-        }
-        // X11: xclip reads from stdin
-        use std::io::Write;
-        let result = std::process::Command::new("xclip")
-            .args(["-selection", "clipboard"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                if let Some(ref mut stdin) = child.stdin {
-                    stdin.write_all(text.as_bytes())?;
-                }
-                drop(child.stdin.take());
-                child.wait()
-            });
-        result.map(|o| o.success()).unwrap_or(false)
-    }
-
-    /// Simulate Ctrl+V paste on Linux.
-    pub fn send_ctrl_v() {
-        let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-        if is_wayland {
-            // wtype doesn't support Ctrl+V; try ydotool or just skip
-            let _ = std::process::Command::new("ydotool")
-                .args(["key", "29:1", "47:1", "47:0", "29:0"])
-                .output();
-        } else {
-            // xdotool: Ctrl+V
-            let _ = std::process::Command::new("xdotool")
-                .args(["key", "--clearmodifiers", "ctrl+v"])
-                .output();
-        }
-    }
 }
 
 #[tauri::command]
@@ -1136,91 +1043,20 @@ fn set_foreground_hwnd(hwnd: u64) -> bool {
 ///
 /// Flow: restore previous window focus → set clipboard via Win32 → send Ctrl+V via keybd_event
 #[tauri::command]
-fn type_text(text: String, restore_hwnd: Option<u64>) -> Result<bool, String> {
+fn type_text(text: String, _restore_hwnd: Option<u64>) -> Result<bool, String> {
     if text.trim().is_empty() {
         return Ok(false);
     }
-    let platform = std::env::consts::OS;
-    if platform == "windows" {
-        // Restore focus to the previously-focused window FIRST
-        if let Some(hwnd) = restore_hwnd {
-            win32::set_foreground_hwnd(hwnd);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        // Set clipboard via Win32 API (no PowerShell overhead)
-        if !win32::set_clipboard(&text) {
-            return Err("Failed to set clipboard".into());
-        }
-        // Small delay for clipboard to propagate
-        std::thread::sleep(std::time::Duration::from_millis(30));
-        // Send Ctrl+V via keybd_event (runs in Tauri's GUI thread — has active message loop)
-        win32::send_ctrl_v();
-        return Ok(true);
+    // Use the centralized output module
+    if let Err(e) = crate::output::type_text(&text) {
+        return Err(e.to_string());
     }
-    // Linux — clipboard approach (works regardless of which window has focus)
-    if platform == "linux" {
-        // Restore focus to the previously-captured window (X11 only — Wayland can't)
-        if let Some(hwnd) = restore_hwnd {
-            if hwnd != 0 {
-                win32::set_foreground_hwnd(hwnd);
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-        }
-        // Set clipboard — wtype/xdotool will type from clipboard
-        if !win32::set_clipboard(&text) {
-            return Err("Failed to set clipboard on Linux".into());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(30));
-        // On X11: send Ctrl+V to paste. On Wayland: wtype to paste from clipboard.
-        let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-        if is_wayland {
-            // wtype types directly into the focused Wayland window
-            let out = std::process::Command::new("wtype")
-                .arg(&text)
-                .output();
-            if let Ok(o) = out {
-                if o.status.success() {
-                    return Ok(true);
-                } else {
-                    return Err("wtype failed to type text on Wayland".into());
-                }
-            } else {
-                return Err("wtype command failed on Wayland".into());
-            }
-        }
-        // X11: Ctrl+V via xdotool
-        win32::send_ctrl_v();
-        return Ok(true);
-    }
-    if platform == "macos" {
-        let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-        let script = format!("tell application \"System Events\" to keystroke \"{escaped}\"");
-        let out = std::process::Command::new("osascript")
-            .args(["-e", &script])
-            .output();
-        if let Ok(o) = out {
-            return Ok(o.status.success());
-        }
-    }
-    Err("No typing backend available".into())
+    Ok(true)
 }
 
 #[tauri::command]
 fn get_backend_path() -> Result<String, AppError> {
-    let candidates = vec![
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join("../stt/cli.py")
-            .to_string_lossy()
-            .to_string(),
-        "/usr/local/bin/stt".to_string(),
-    ];
-    for c in &candidates {
-        if std::path::Path::new(c).exists() {
-            return Ok(c.clone());
-        }
-    }
-    Ok("stt".to_string())
+    Ok("builtin".to_string())
 }
 
 #[tauri::command]
@@ -1326,6 +1162,21 @@ fn check_system_deps() -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn test_microphone() -> Result<serde_json::Value, String> {
+    let devices = crate::audio::list_input_devices().map_err(|e| e.to_string())?;
+    let count = devices.len();
+    let devices: Vec<serde_json::Value> = devices
+        .into_iter()
+        .map(|(name, id)| serde_json::json!({ "name": name, "id": id }))
+        .collect();
+    Ok(serde_json::json!({ "devices": devices, "count": count, "ok": true }))
+}
+
+// ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
 
@@ -1407,8 +1258,11 @@ pub fn run() {
             get_platform_info,
             check_system_deps,
             check_model_status,
+            download_model,
             delete_model_file,
             get_history,
+            delete_history_entry,
+            toggle_history_favorite,
             get_insights,
             get_voice_intelligence,
             get_dictionary,
@@ -1421,6 +1275,12 @@ pub fn run() {
             type_text,
             get_foreground_hwnd,
             set_foreground_hwnd,
+            get_available_mics,
+            test_microphone,
+            get_floure_config,
+            set_floure_config,
+            start_listening,
+            stop_listening,
             widget::show_widget,
             widget::hide_widget,
             widget::get_widget_visible,

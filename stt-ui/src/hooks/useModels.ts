@@ -1,20 +1,23 @@
 // ── Model management hook: check status, download, track progress ──
 import { useState, useCallback, useEffect, useRef } from "react";
-import { MODEL_CATALOG } from "../store";
-import type { ModelInfo } from "../store";
+import { MODEL_CATALOG, LLM_MODEL_CATALOG } from "../store";
+import type { ASRBackend, ModelInfo, LlmModelInfo } from "../store";
 
 export interface ModelStatusEntry {
   name: string;
-  backend: "whisper_cpp" | "faster_whisper";
+  id: string;
+  backend: ASRBackend | "whisper_cpp" | "faster_whisper" | LlmModelInfo["backend"];
   downloaded: boolean;
   downloading: boolean;
   progress: number;
   error: string | null;
   sizeBytes: number;
   path: string;
+  section: "asr" | "llm";
 }
 
 interface RustModelStatus {
+  id: string;
   name: string;
   downloaded: boolean;
   path: string;
@@ -25,22 +28,39 @@ function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+function buildInitialModels(): ModelStatusEntry[] {
+  const asr = MODEL_CATALOG.map((m) => ({
+    name: m.name,
+    id: m.id,
+    backend: m.backend,
+    downloaded: false,
+    downloading: false,
+    progress: 0,
+    error: null,
+    sizeBytes: 0,
+    path: "",
+    section: "asr" as const,
+  }));
+  const llm = LLM_MODEL_CATALOG.map((m) => ({
+    name: m.name,
+    id: m.id,
+    backend: m.backend,
+    downloaded: false,
+    downloading: false,
+    progress: 0,
+    error: null,
+    sizeBytes: 0,
+    path: "",
+    section: "llm" as const,
+  }));
+  return [...asr, ...llm];
+}
+
 export function useModels() {
-  const [models, setModels] = useState<ModelStatusEntry[]>(() =>
-    MODEL_CATALOG.map((m) => ({
-      name: m.name,
-      backend: m.backend,
-      downloaded: false,
-      downloading: false,
-      progress: 0,
-      error: null,
-      sizeBytes: 0,
-      path: "",
-    }))
-  );
+  const [models, setModels] = useState<ModelStatusEntry[]>(buildInitialModels);
   const [loading, setLoading] = useState(true);
   const [globalError, setGlobalError] = useState<string | null>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
 
   const refreshModels = useCallback(async () => {
     if (!isTauri()) {
@@ -53,8 +73,10 @@ export function useModels() {
 
       setModels((prev) =>
         prev.map((m) => {
-          // Match by name across both whisper_cpp and faster_whisper entries
-          const status = rustStatuses.find((s) => s.name === m.name);
+          // Match by name first, fall back to id (backend uses id for LLM models)
+          const status =
+            rustStatuses.find((s) => s.name === m.name) ??
+            rustStatuses.find((s) => s.id === m.id);
           if (status) {
             return {
               ...m,
@@ -83,6 +105,12 @@ export function useModels() {
       return;
     }
 
+    const entry = models.find((m) => m.name === modelName);
+    if (!entry) {
+      setGlobalError(`Model "${modelName}" not found in catalog`);
+      return;
+    }
+
     setModels((prev) =>
       prev.map((m) =>
         m.name === modelName
@@ -92,42 +120,34 @@ export function useModels() {
     );
 
     try {
-      const { Command } = await import("@tauri-apps/plugin-shell");
-      const cmd = Command.sidecar("binaries/stt-engine", [
-        "--json-mode",
-        "--model", modelName,
-        "--asr-profile", "speed",
-        "--llm-mode", "off",
-        "--input-file", "/dev/null",
-      ]);
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("download_model", { id: entry.id });
 
-      let lastProgress = 0;
-      cmd.stdout.on("data", (line: string) => {
-        // Parse download progress from stdout
-        const downloadMatch = line.match(/Downloading.*?(\d+)%/i) || line.match(/(\d+)%/);
-        if (downloadMatch) {
-          lastProgress = parseInt(downloadMatch[1], 10);
-          setModels((prev) =>
-            prev.map((m) =>
-              m.name === modelName
-                ? { ...m, progress: lastProgress }
-                : m
-            )
-          );
+      // Poll check_model_status until the model appears downloaded.
+      const poll = setInterval(async () => {
+        try {
+          const statuses = await invoke<RustModelStatus[]>("check_model_status");
+          const status =
+            statuses.find((s) => s.name === modelName) ??
+            statuses.find((s) => s.id === entry.id);
+          if (status?.downloaded) {
+            clearInterval(poll);
+            pollingRef.current.delete(entry.id);
+            setModels((prev) =>
+              prev.map((m) =>
+                m.name === modelName
+                  ? { ...m, downloading: false, progress: 100 }
+                  : m
+              )
+            );
+            await refreshModels();
+          }
+        } catch {
+          /* retry next tick */
         }
-      });
+      }, 2000);
 
-      await cmd.execute();
-
-      // Mark as done and refresh actual disk status
-      setModels((prev) =>
-        prev.map((m) =>
-          m.name === modelName
-            ? { ...m, downloading: false, progress: 100 }
-            : m
-        )
-      );
-      await refreshModels();
+      pollingRef.current.set(entry.id, poll);
     } catch (err) {
       setModels((prev) =>
         prev.map((m) =>
@@ -137,7 +157,7 @@ export function useModels() {
         )
       );
     }
-  }, [refreshModels]);
+  }, [models, refreshModels]);
 
   const deleteModel = useCallback(async (modelName: string) => {
     if (!isTauri()) return;
@@ -146,30 +166,22 @@ export function useModels() {
     if (!model || !model.downloaded || !model.path) return;
 
     try {
-      const { Command } = await import("@tauri-apps/plugin-shell");
-      await Command.sidecar("binaries/stt-engine", [
-        "--json-mode",
-        "--delete-model", modelName,
-        "--llm-mode", "off",
-        "--input-file", "/dev/null",
-      ]).execute();
+      const { invoke: invokeCmd } = await import("@tauri-apps/api/core");
+      await invokeCmd("delete_model_file", { path: model.path });
       await refreshModels();
     } catch {
-      // Fallback: try direct removal via Rust
-      try {
-        const { invoke: invokeCmd } = await import("@tauri-apps/api/core");
-        await invokeCmd("delete_model_file", { path: model.path });
-        await refreshModels();
-      } catch {
-        setGlobalError(`Failed to delete ${modelName}`);
-      }
+      setGlobalError(`Failed to delete ${modelName}`);
     }
   }, [models, refreshModels]);
 
   // Cleanup polling on unmount
   useEffect(() => {
+    // Capture the live map: intervals added later are visible through it,
+    // and the linter is satisfied by not touching .current in cleanup.
+    const timers = pollingRef.current;
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
+      timers.forEach((timer) => clearInterval(timer));
+      timers.clear();
     };
   }, []);
 
@@ -185,6 +197,10 @@ export function useModels() {
 
 export function getModelInfo(modelName: string): ModelInfo | undefined {
   return MODEL_CATALOG.find((m) => m.name === modelName);
+}
+
+export function getLlmModelInfo(modelName: string): LlmModelInfo | undefined {
+  return LLM_MODEL_CATALOG.find((m) => m.name === modelName);
 }
 
 export function formatBytes(bytes: number): string {

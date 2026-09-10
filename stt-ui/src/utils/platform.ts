@@ -61,12 +61,3 @@ export function detectPlatform(): PlatformInfo {
   return _cached;
 }
 
-export function checkClipboardTool(): boolean {
-  if (typeof navigator !== "undefined" && navigator.clipboard) return true;
-  return true;
-}
-
-export function checkTypingTool(): boolean {
-  return true;
-}
-

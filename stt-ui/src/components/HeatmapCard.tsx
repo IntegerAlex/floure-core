@@ -40,7 +40,7 @@ export default function HeatmapCard({ data }: HeatmapCardProps) {
           {WEEKDAY_LABELS.map((label, i) => (
             <div
               key={i}
-              className="h-[13px] text-[10px] text-text-muted leading-[13px]"
+              className="h-[13px] text-[11px] text-text-muted leading-[13px]"
             >
               {label}
             </div>
@@ -52,7 +52,7 @@ export default function HeatmapCard({ data }: HeatmapCardProps) {
             {week.map((day, di) => (
               <div
                 key={di}
-                className="w-[13px] h-[13px] rounded-[3px] transition-all duration-300 hover:ring-1 hover:ring-accent/30 hover:scale-110"
+                className="w-[13px] h-[13px] rounded-[3px] transition-all duration-150 hover:ring-1 hover:ring-accent/30 hover:scale-110"
                 style={{
                   background: LEVEL_COLORS[day.level] ?? LEVEL_COLORS[0],
                   opacity: isVisible ? 1 : 0,
@@ -66,7 +66,7 @@ export default function HeatmapCard({ data }: HeatmapCardProps) {
       </div>
 
       <div className="flex items-center justify-end gap-1.5 mt-4">
-        <span className="text-[10px] text-text-muted mr-1">Less</span>
+        <span className="text-[11px] text-text-muted mr-1">Less</span>
         {[0, 1, 2, 3, 4].map((level) => (
           <div
             key={level}
@@ -74,7 +74,7 @@ export default function HeatmapCard({ data }: HeatmapCardProps) {
             style={{ background: LEVEL_COLORS[level] }}
           />
         ))}
-        <span className="text-[10px] text-text-muted ml-1">More</span>
+        <span className="text-[11px] text-text-muted ml-1">More</span>
       </div>
     </div>
   );

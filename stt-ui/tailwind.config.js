@@ -26,7 +26,7 @@ export default {
         text: {
           primary: "#2C2520",
           secondary: "#6B6560",
-          muted: "#9C9690",
+          muted: "#76716B",
           disabled: "#C4BFB8",
         },
         border: {
@@ -55,12 +55,14 @@ export default {
       },
       fontFamily: {
         sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
-        serif: ["Instrument Serif", "Cormorant Garamond", "ui-serif", "serif"],
+        serif: ["Instrument Serif", "ui-serif", "serif"],
       },
       fontSize: {
         "page-title": ["32px", { lineHeight: "40px", fontWeight: "600" }],
         "section-heading": ["20px", { lineHeight: "28px", fontWeight: "600" }],
         "card-heading": ["18px", { lineHeight: "26px", fontWeight: "600" }],
+        heading: ["18px", { lineHeight: "26px", fontWeight: "600" }],
+        subheading: ["14px", { lineHeight: "20px", fontWeight: "600" }],
         body: ["15px", { lineHeight: "24px", fontWeight: "400" }],
         small: ["13px", { lineHeight: "20px", fontWeight: "400" }],
         label: ["12px", { lineHeight: "16px", fontWeight: "600", letterSpacing: "0.04em" }],

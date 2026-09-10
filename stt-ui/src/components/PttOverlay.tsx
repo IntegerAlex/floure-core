@@ -33,7 +33,7 @@ export default function PttOverlay({ visible }: PttOverlayProps) {
         {/* Pulsing mic icon */}
         <div className="relative flex items-center justify-center w-[28px] h-[28px]">
           <div
-            className="absolute inset-0 rounded-full bg-accent"
+            className="absolute inset-0 rounded-full bg-accent ptt-pulse"
             style={{
               animation: visible ? "ptt-pulse 1.5s ease-in-out infinite" : "none",
             }}
@@ -48,7 +48,7 @@ export default function PttOverlay({ visible }: PttOverlayProps) {
           {[0, 1, 2].map((i) => (
             <div
               key={i}
-              className="w-[3px] rounded-full bg-accent"
+              className="w-[3px] rounded-full bg-accent ptt-wave"
               style={{
                 height: "12px",
                 animation: visible ? `ptt-wave 0.8s ease-in-out ${i * 0.15}s infinite alternate` : "none",

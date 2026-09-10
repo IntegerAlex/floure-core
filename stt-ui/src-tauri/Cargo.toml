@@ -33,6 +33,21 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 csv = "1"
 dirs-next = "2"
 thiserror = "2"
+sherpa-onnx = "1.13"
+cpal = "0.18"
+llama-cpp-4 = "0.6"
+
+# GPU offload (Vulkan) is built on Linux only, where the CI/release
+# runners and dev machines can provision glslc + SPIRV-Headers.
+# Windows/macOS fall back to CPU inference.
+[target.'cfg(target_os = "linux")'.dependencies]
+llama-cpp-4 = { version = "0.6", features = ["vulkan"] }
+reqwest = { version = "0.12", features = ["json", "stream", "gzip", "blocking"] }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+bzip2 = "0.4"
+tar = "0.4"
+futures-util = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
