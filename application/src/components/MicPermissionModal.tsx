@@ -34,8 +34,8 @@ export default function MicPermissionModal({
           Microphone Access Required
         </h2>
         <p className="mb-5 text-[13px] leading-relaxed text-text-muted">
-          Floure needs microphone access to transcribe your speech. Enable microphone access in
-          Config before using voice recognition.
+          Floure needs your microphone to transcribe your speech. Audio is processed on your
+          device and never uploaded.
         </p>
 
         {/* Buttons */}
