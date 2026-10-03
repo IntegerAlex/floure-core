@@ -63,9 +63,9 @@ This was in the original plan as evidence-backed. **The evidence says the opposi
 **Applied to Floure (concrete):**
 1. Raise the stop-flush to **0.6–0.8 s** (from 0.5 s), derived from the negotiated rate.
 2. Reconsider **`max_speech_duration`** — 5 s silently splits long dictation. Raise toward 10–20 s, or emit the segment and continue rather than treating 5 s as a hard boundary.
-3. Add **`speech_pad_ms ≈ 30`** so final phonemes aren't clipped.
-4. Add a **per-device noise-floor calibration** (measure ~300 ms of ambient silence at capture start, shift the VAD threshold), rather than a universal 0.5.
-5. Replace the linear resampler with a **polyphase/windowed-sinc** one (48k→16k = 1/3; 44.1k→16k = 160/147).
+3. Add **`speech_pad_ms ≈ 30`** so final phonemes aren't clipped. **Not possible at sherpa-onnx 1.13.7** — `SileroVadModelConfig` exposes only `model`, `threshold`, `min_silence_duration`, `min_speech_duration`, `window_size` and `max_speech_duration`. This would need the native config path.
+4. Add a **per-device noise-floor calibration** (measure ~300 ms of ambient silence at capture start, shift the VAD threshold), rather than a universal 0.5. **Deferred** — it needs real-mic validation, not a guess.
+5. Replace the linear resampler with a **polyphase/windowed-sinc** one (48k→16k = 1/3; 44.1k→16k = 160/147). Linear gives ~26 dB image suppression vs 50+ dB for polyphase. **Deferred** — sherpa-onnx only ships `LinearResampler`; a replacement is its own task.
 
 ---
 
