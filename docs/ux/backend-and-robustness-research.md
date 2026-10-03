@@ -134,6 +134,39 @@ Fuzz the PCM path and any model-input parsing with `cargo-fuzz`; OSS-Fuzz has fo
 
 # Part 3 — Prioritised actions
 
+## Status (as of 2026-10-03)
+
+| # | Action | Status |
+|---|---|---|
+| 1 | Handle all cpal sample formats | ✅ `9067559` |
+| 2 | Thread negotiated rate/channels through length/timing | ✅ `1af36a0` (flush), `9067559` (scaling) |
+| 3 | `FakeCaptureSource` + rate-invariance & flush-invariant property tests | 🟡 flush invariant ✅; rate invariance still needs ASR models (integration test) |
+| 4 | Device selection by stable `id()`, not name/index | ✅ `a14d891` |
+| 5 | Raise stop-flush to 0.6–0.8 s at the negotiated rate | ✅ `1af36a0` (0.7 s) |
+| 6 | Reconsider `max_speech_duration` (5 s silently split dictation) | ✅ `1af36a0` (10 s) |
+| 7 | `speech_pad_ms` + per-device noise-floor calibration | ❌ not exposed by sherpa-onnx 1.13.7; calibration needs real-mic validation |
+| 8 | Polyphase resampler instead of linear | ⬜ deferred — sherpa only ships `LinearResampler` |
+| 9 | Hotplug recovery on the cpal error callback | ✅ `a14d891` |
+| 10 | Re-speaking correction + local correction cache | 🟡 dictionary → decode bias ✅ `e7e358e`; re-speak-to-replace still open (needs backspace control in the target app) |
+| 11 | **Do not** ship per-word confidence colouring | ✅ decision recorded, not built |
+| 12 | Anonymous local capability record | ✅ `7c56077` |
+
+### Also landed from the UX research
+
+- Platform-aware PTT onboarding (Linux loopback vs Windows hotkey) — `510d9cc`, `132a234`
+- Plain-language error categories — `510d9cc`
+- Tray icon state, settings search, pill occlusion clamp, History date filter — concurrent work in the same tree
+
+### Still open
+
+- **Rate-invariance test** — needs the ASR models, so it is an integration test, not a unit test.
+- **Polyphase resampler** — linear gives ~26 dB image suppression vs 50+ dB; sherpa-onnx only ships `LinearResampler`, so this is its own task.
+- **Noise-floor calibration** — needs real-mic validation across devices; a guessed threshold is worse than a fixed one.
+- **`speech_pad_ms`** — absent from the safe wrapper; would need the native config path.
+- **Re-speak-to-replace** — Floure types into another app and cannot see or rewrite that text, so replacing an utterance needs backspace control, which is fragile across applications.
+
+## Original ranking
+
 | # | Action | Evidence | Effort |
 |---|---|---|---|
 | 1 | Handle all cpal sample formats (at minimum I32, F64) instead of erroring | **[V]** cpal surface | low |
