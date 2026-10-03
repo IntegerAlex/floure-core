@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { usePermissions } from "@/hooks/usePermissions";
 import Dialog from "./Dialog";
 import type { RuntimeSettings } from "../lib/settings";
+import { getStoredHotkey, HOTKEY_STORAGE_KEY } from "../lib/settings";
 
 interface Props {
   settings: RuntimeSettings;
@@ -13,11 +14,12 @@ interface Props {
 }
 
 const HOTKEY_OPTIONS = [
+  { value: "CommandOrControl+Shift+F12", label: "Ctrl + Shift + F12" },
+  { value: "CommandOrControl+Shift+K", label: "Ctrl + Shift + K" },
   { value: "CommandOrControl+Shift+Space", label: "Ctrl + Shift + Space" },
   { value: "CommandOrControl+Alt+Space", label: "Ctrl + Alt + Space" },
   { value: "Alt+Space", label: "Alt + Space" },
   { value: "Super+Space", label: "Super + Space" },
-  { value: "CommandOrControl+Shift+K", label: "Ctrl + Shift + K" },
 ];
 
 const TOGGLES = [
@@ -29,9 +31,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
   const [local, setLocal] = useState<RuntimeSettings>({ ...settings });
   const [showKeys, setShowKeys] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const [hotkey, setHotkey] = useState(
-    () => localStorage.getItem("stt-hotkey") || "CommandOrControl+Shift+Space",
-  );
+  const [hotkey, setHotkey] = useState(() => getStoredHotkey());
   const { permissions, requestClipboard, requestMic, isCapturingMic, stopMic } = usePermissions();
 
   useEffect(() => {
@@ -40,7 +40,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
 
   useEffect(() => {
     if (visible) {
-      setHotkey(localStorage.getItem("stt-hotkey") || "CommandOrControl+Shift+Space");
+      setHotkey(getStoredHotkey());
       setConfirmDiscard(false);
     }
   }, [visible]);
@@ -379,7 +379,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
             "disabled:pointer-events-none disabled:opacity-50",
           )}
           onClick={() => {
-            localStorage.setItem("stt-hotkey", hotkey);
+            localStorage.setItem(HOTKEY_STORAGE_KEY, hotkey);
             onSave(local);
             onClose();
           }}

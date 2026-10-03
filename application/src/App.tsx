@@ -16,6 +16,7 @@ import { useEngine } from "./hooks/useEngine";
 import { useHistoryLog } from "./hooks/useHistoryLog";
 import { FeedView, type TranscriptLine } from "./views/FeedView";
 import { categoryForKind } from "./lib/errors";
+import { getStoredHotkey } from "./lib/settings";
 
 function App() {
   const { settings, setSettings, syncError } = useSettings();
@@ -29,9 +30,7 @@ function App() {
   const [errors, setErrors] = useState<AppError[]>([]);
   const [activeItem, setActiveItem] = useState("Home");
   const [settingsVersion, setSettingsVersion] = useState(0);
-  const [hotkey] = useState(
-    () => localStorage.getItem("stt-hotkey") || "CommandOrControl+Shift+Space",
-  );
+  const [hotkey] = useState(() => getStoredHotkey());
 
   const feedRef = useRef<HTMLDivElement | null>(null);
 
@@ -234,9 +233,18 @@ function App() {
             /* ok */
           }
         }
-        const savedHotkey = localStorage.getItem("stt-hotkey") || "CommandOrControl+Shift+Space";
+        const savedHotkey = getStoredHotkey();
+        // A release schedules stop 300ms out; a re-press inside that window
+        // cancels it and keeps the same session (no restart, no lost tail).
+        let pendingStop: number | null = null;
         await register(savedHotkey, (event) => {
           if (event.state === "Pressed") {
+            if (pendingStop !== null) {
+              window.clearTimeout(pendingStop);
+              pendingStop = null;
+              console.log("[PTT] Re-press — scheduled stop cancelled");
+              return;
+            }
             if (connectedRef.current) {
               console.log("[PTT] Ignored — already recording");
               return;
@@ -251,8 +259,12 @@ function App() {
               console.log("[PTT] Not recording — nothing to commit");
               return;
             }
-            // Wait briefly for in-flight transcription to complete, then stop+commit
-            setTimeout(() => {
+            // Wait briefly for in-flight transcription to complete, then stop+commit.
+            // ponytail: fixed 300ms heuristic; no backend "segment fully
+            // typed" signal exists to wait on instead.
+            if (pendingStop !== null) window.clearTimeout(pendingStop);
+            pendingStop = window.setTimeout(() => {
+              pendingStop = null;
               stopRef.current();
             }, 300);
           }
@@ -273,6 +285,30 @@ function App() {
       }
     };
   }, [hotkey, connectedRef, startRef, stopRef]);
+
+  // --- Bare Ctrl+Win hold-to-talk (Windows native hook, backend emits) ---
+  // Reuses the same start/stop refs, so overlay, sounds, widget, and guards
+  // apply. Coexists with the registered shortcut; both funnel here.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<string>("ptt-hook", (event) => {
+          if (event.payload === "pressed") {
+            if (!connectedRef.current) startRef.current(undefined, "Hook");
+          } else if (connectedRef.current) {
+            stopRef.current();
+          }
+        });
+      } catch {
+        /* not in Tauri */
+      }
+    })();
+    return () => {
+      unlisten?.();
+    };
+  }, [connectedRef, startRef, stopRef]);
 
   const copyText = async (text: string, label: string) => {
     const { copyToClipboard } = await import("@/lib/clipboard");

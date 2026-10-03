@@ -335,7 +335,7 @@ impl LlmCleanup {
 
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(512))
-            .with_n_threads(4);
+            .with_n_threads(crate::compute::inference_threads() as i32);
         let mut ctx = model.new_context(backend, ctx_params)?;
         let mut batch = LlamaBatch::new(512, 1);
 
@@ -414,9 +414,16 @@ impl LlmCleanup {
         prompt: &str,
         mut callback: F,
     ) -> Result<()> {
+        // Read the *live* session key: engines are cached across presses, so
+        // the copy captured in `new` is whatever existed at warm-up — which
+        // runs before the UI has entered a key, and `engine_key` does not
+        // include it. Without this, cloud cleanup fails with "API key not set"
+        // until a restart or a provider/model change rebuilds the engine. The
+        // stored copy stays as the fallback for a key set at construction.
         let api_key = self
             .api_key
-            .as_ref()
+            .clone()
+            .or_else(openrouter_api_key)
             .ok_or_else(|| anyhow::anyhow!("API key not set"))?;
 
         let url = self

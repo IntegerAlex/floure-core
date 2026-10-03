@@ -44,13 +44,11 @@ impl ComputeDevice {
 
 /// Detect the best compute device. Cheap sysfs/process checks only —
 /// no GPU context is created here.
+///
+/// The Vulkan backend is compiled in only with the `vulkan` cargo feature;
+/// without it llama.cpp silently keeps layers on CPU whatever we choose.
 pub fn detect() -> ComputeDevice {
-    // GPU builds exist on Linux only; elsewhere the CPU path is the only
-    // honest answer (llama.cpp silently keeps layers on CPU there).
-    if !cfg!(target_os = "linux") {
-        eprintln!("[compute] GPU offload is currently Linux-only -> CPU path");
-        return ComputeDevice::Cpu;
-    }
+    // Explicit override first — honored on every OS.
     if let Ok(v) = std::env::var("FLOURE_COMPUTE").map(|v| v.to_ascii_lowercase()) {
         match v.as_str() {
             "cpu" => {
@@ -74,13 +72,15 @@ pub fn detect() -> ComputeDevice {
         }
     }
 
+    // nvidia-smi ships with NVIDIA drivers on Windows too, so this probe
+    // works cross-platform. The AMD probe is sysfs-based (Linux-only).
     if has_nvidia_gpu() {
         return ComputeDevice::NvidiaDiscrete;
     }
-    if has_amd_gpu() {
+    if cfg!(target_os = "linux") && has_amd_gpu() {
         return ComputeDevice::AmdGpu;
     }
-    eprintln!("[compute] no discrete/AMD GPU detected -> CPU path");
+    eprintln!("[compute] no usable GPU detected -> CPU path");
     ComputeDevice::Cpu
 }
 
@@ -91,6 +91,21 @@ pub fn main_gpu() -> i32 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
+}
+
+/// Thread budget for every inference pool (Parakeet/Whisper thread counts,
+/// llama.cpp contexts, `OMP_NUM_THREADS`).
+///
+/// Leaves headroom so the UI thread and WebView renderer never starve:
+/// sustained all-core load is what got the app killed as "Not Responding"
+/// (Windows Event 1002). Floor 2 keeps tiny machines functional.
+/// ponytail: fixed ceiling of 8; raise only if ASR latency measurably
+/// regresses on many-core boxes.
+pub fn inference_threads() -> u32 {
+    let avail = std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4);
+    avail.saturating_sub(4).clamp(2, 8)
 }
 
 /// NVIDIA proprietary driver presence: /dev/nvidia* nodes, confirmed by
@@ -165,5 +180,12 @@ mod tests {
         if std::env::var("FLOURE_MAIN_GPU").is_err() {
             assert_eq!(main_gpu(), 0);
         }
+    }
+
+    #[test]
+    fn inference_threads_stay_within_budget() {
+        // Hardware-independent: whatever the core count, the budget leaves
+        // headroom (never all cores) and stays usable (never < 2).
+        assert!((2..=8).contains(&inference_threads()));
     }
 }

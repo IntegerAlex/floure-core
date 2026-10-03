@@ -9,6 +9,8 @@ mod models;
 mod output;
 mod parakeet;
 mod pipeline;
+#[cfg(windows)]
+mod ptt_hook;
 #[cfg(test)]
 mod tests;
 mod vad;
@@ -973,9 +975,27 @@ async fn start_listening(app: tauri::AppHandle) -> Result<(), AppError> {
     result.map_err(|e| AppError::Audio(e.to_string()))
 }
 
+/// Joining the worker blocks on whatever ASR/LLM call is in flight, and a
+/// synchronous command runs on the main thread — the UI froze until the
+/// current utterance finished. `async` plus `spawn_blocking` keeps the join
+/// (and its stop-flush) but off the UI thread.
 #[tauri::command]
-fn stop_listening() {
-    crate::pipeline::stop_pipeline();
+async fn stop_listening() {
+    let _ = tauri::async_runtime::spawn_blocking(crate::pipeline::stop_pipeline).await;
+}
+
+/// Engine warm state for the start-up notice: "warming" while the
+/// background warm thread runs, "ready" once its engines are cached,
+/// "cold" when models are missing (first press downloads instead).
+#[tauri::command]
+fn engine_status() -> &'static str {
+    if crate::pipeline::is_warming() {
+        "warming"
+    } else if crate::pipeline::is_ready() {
+        "ready"
+    } else {
+        "cold"
+    }
 }
 
 #[tauri::command]
@@ -1202,13 +1222,37 @@ pub fn run() {
             set_openrouter_api_key,
             start_listening,
             stop_listening,
+            engine_status,
+            widget::show_widget,
             widget::hide_widget,
             widget::toggle_widget
         ])
         .setup(|app| {
+            // Cap OpenMP before any inference thread spawns: the uncapped
+            // pool (one thread per core) starved the renderer and got the
+            // app killed as "Not Responding". An explicit user value wins.
+            if std::env::var("OMP_NUM_THREADS").is_err() {
+                std::env::set_var(
+                    "OMP_NUM_THREADS",
+                    crate::compute::inference_threads().to_string(),
+                );
+            }
+
             // --- Local control channel (Waybar, compositor hotkeys) ---
             // Loopback-only; bind failures are non-fatal (logged in control.rs).
             control::start_control_server(app.handle().clone());
+
+            // --- Bare Ctrl+Win hold-to-talk (Windows only) ---
+            // The global shortcut needs a main key; this hook covers the
+            // pure-modifier chord and reuses the same frontend start/stop.
+            #[cfg(windows)]
+            crate::ptt_hook::start_ptt_hook(app.handle().clone());
+
+            // --- Background engine warm-up: first press must not pay load ---
+            let warm_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                crate::pipeline::warm_engines(warm_handle, crate::config::AppConfig::load());
+            });
 
             // --- System tray with start/stop menu ---
             use tauri::menu::{Menu, MenuItem};
