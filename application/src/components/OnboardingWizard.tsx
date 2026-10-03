@@ -17,6 +17,7 @@ import { MODEL_CATALOG } from "../store";
 import type { SystemCheck } from "../store";
 import { usePermissions } from "../hooks/usePermissions";
 import { micLevelEmitter } from "../utils/mic-emitter";
+import { getStoredHotkey } from "../lib/settings";
 
 function StepIndicator({ step, total }: { step: number; total: number }) {
   return (
@@ -361,7 +362,13 @@ function Step4Permissions({
   );
 }
 
-function Step5Ready({ onFinish }: { onFinish: () => void }) {
+function Step5Ready({ hotkey, onFinish }: { hotkey: string; onFinish: () => void }) {
+  // Wayland has no core key-grab, so a global hotkey is best-effort there. The
+  // loopback control server (127.0.0.1:17833) is the reliable Linux trigger —
+  // the user binds a compositor key to `curl -X POST localhost:17833/toggle`.
+  const isLinux =
+    typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("linux");
+
   return (
     <div className="flex flex-col items-center gap-6 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent/10 text-accent">
@@ -383,32 +390,41 @@ function Step5Ready({ onFinish }: { onFinish: () => void }) {
       </div>
       <h2 className="text-balance text-heading text-text-primary">You're All Set!</h2>
       <p className="text-body text-text-secondary">
-        Press{" "}
-        <kbd className="inline-flex items-center rounded-badge border border-border bg-app-surface-secondary px-2 py-0.5 text-label font-semibold text-text-primary">
-          Space
-        </kbd>{" "}
-        to start/stop dictation anytime.
+        Your audio never leaves this device — everything runs locally.
       </p>
-      <div className="flex w-full flex-col gap-2 rounded-card border border-border bg-app-surface p-4 text-left text-body text-text-secondary">
-        <div>
-          <kbd className="mr-2 inline-flex items-center rounded-badge border border-border bg-app-surface-secondary px-2 py-0.5 text-label font-semibold text-text-primary">
-            Space
-          </kbd>{" "}
-          Start / Stop
+      {isLinux ? (
+        <div className="flex w-full flex-col gap-2 rounded-card border border-border bg-app-surface p-4 text-left text-body text-text-secondary">
+          <p className="text-small text-text-muted">
+            On Linux/Wayland, global hotkeys are compositor-dependent. The reliable trigger is the
+            built-in control server — bind a compositor key to:
+          </p>
+          <code className="block w-full overflow-x-auto rounded-[8px] bg-app-surface-secondary px-3 py-2 text-left text-[12px] text-text-primary">
+            curl -X POST localhost:17833/toggle
+          </code>
+          <p className="text-small text-text-muted">Add to your Sway/Hyprland/KDE config, e.g.:</p>
+          <code className="block w-full overflow-x-auto rounded-[8px] bg-app-surface-secondary px-3 py-2 text-left text-[12px] text-text-primary">
+            bindsym $mod+d exec "curl -X POST localhost:17833/toggle"
+          </code>
+          <p className="text-small text-text-muted">
+            You can also start/stop from the tray icon or the widget button.
+          </p>
         </div>
-        <div>
-          <kbd className="mr-2 inline-flex items-center rounded-badge border border-border bg-app-surface-secondary px-2 py-0.5 text-label font-semibold text-text-primary">
-            Space
-          </kbd>{" "}
-          (hold) Talk, release to transcribe
+      ) : (
+        <div className="flex w-full flex-col gap-2 rounded-card border border-border bg-app-surface p-4 text-left text-body text-text-secondary">
+          <div>
+            <kbd className="mr-2 inline-flex items-center rounded-badge border border-border bg-app-surface-secondary px-2 py-0.5 text-label font-semibold text-text-primary">
+              {hotkey}
+            </kbd>{" "}
+            Start / Stop
+          </div>
+          <div>
+            <kbd className="mr-2 inline-flex items-center rounded-badge border border-border bg-app-surface-secondary px-2 py-0.5 text-label font-semibold text-text-primary">
+              {hotkey}
+            </kbd>{" "}
+            (hold) Talk, release to transcribe
+          </div>
         </div>
-        <div>
-          <kbd className="mr-2 inline-flex items-center rounded-badge border border-border bg-app-surface-secondary px-2 py-0.5 text-label font-semibold text-text-primary">
-            Esc
-          </kbd>{" "}
-          Cancel current
-        </div>
-      </div>
+      )}
       <div className="flex items-center justify-center">
         <button
           className={cn(
@@ -474,15 +490,6 @@ export default function OnboardingWizard({ onFinished }: Props) {
               />
             )}
             {step === 1 && (
-              <Step2ModelDownload
-                progress={modelDownloadProgress}
-                onDownload={(models) => {
-                  downloadModels(models);
-                }}
-                onDone={() => nextStep()}
-              />
-            )}
-            {step === 2 && (
               <Step3MicSetup
                 micLevel={micLevel}
                 testing={isCapturingMic}
@@ -491,6 +498,15 @@ export default function OnboardingWizard({ onFinished }: Props) {
                   stopMic();
                   nextStep();
                 }}
+              />
+            )}
+            {step === 2 && (
+              <Step2ModelDownload
+                progress={modelDownloadProgress}
+                onDownload={(models) => {
+                  downloadModels(models);
+                }}
+                onDone={() => nextStep()}
               />
             )}
             {step === 3 && (
@@ -502,7 +518,7 @@ export default function OnboardingWizard({ onFinished }: Props) {
                 onDone={() => nextStep()}
               />
             )}
-            {step === 4 && <Step5Ready onFinish={finish} />}
+            {step === 4 && <Step5Ready hotkey={getStoredHotkey()} onFinish={finish} />}
           </div>
         </div>
       </div>

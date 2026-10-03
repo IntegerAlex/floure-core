@@ -19,11 +19,11 @@ interface Props {
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
-  connection: "conn",
-  model: "model",
-  mic: "mic",
-  permission: "perm",
-  general: "error",
+  connection: "Connection",
+  model: "Model",
+  mic: "Microphone",
+  permission: "Permission",
+  general: "Error",
 };
 
 export default function ErrorSidePanel({ errors, onDismiss, onRetry, visible, onClose }: Props) {
