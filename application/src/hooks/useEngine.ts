@@ -280,8 +280,16 @@ export function useEngine({
       // Fire-and-forget: awaiting here opens a window where a quick release
       // sees connected=false, skips the stop, and leaves the mic running
       // until the next press.
+      // Work-area bottom in physical px — lets the backend clamp the pill
+      // above the taskbar/dock instead of guessing from screen height.
+      // availTop is CSSOM and not universally implemented; missing it reads
+      // as 0, which errs toward more clearance, never occlusion.
+      const scr = window.screen as Screen & { availTop?: number };
+      const workBottom = Math.round(
+        ((scr.availTop ?? 0) + window.screen.availHeight) * (window.devicePixelRatio || 1),
+      );
       void import("@tauri-apps/api/core")
-        .then(({ invoke }) => invoke("show_widget"))
+        .then(({ invoke }) => invoke("show_widget", { workBottom }))
         .catch(() => {
           /* widget is best-effort — never break PTT over it */
         });

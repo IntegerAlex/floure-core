@@ -10,8 +10,13 @@ fn is_wayland() -> bool {
 
 /// Show + position the widget window. Visibility entry points: `show_widget`
 /// (PTT auto-show), `hide_widget`, and `toggle_widget` (manual control).
+///
+/// `work_bottom` is the work-area bottom edge in physical pixels, computed in
+/// the frontend from `screen.availTop + screen.availHeight`. When present the
+/// pill is clamped above it, so it can never occlude the taskbar/dock
+/// (research §2 rec 6). Falls back to an ~80px screen-bottom heuristic.
 #[tauri::command]
-pub fn show_widget(app: AppHandle) -> Result<(), String> {
+pub fn show_widget(app: AppHandle, work_bottom: Option<i32>) -> Result<(), String> {
     let window = app
         .get_webview_window("widget")
         .ok_or_else(|| "Widget window not found".to_string())?;
@@ -30,10 +35,19 @@ pub fn show_widget(app: AppHandle) -> Result<(), String> {
                 .outer_size()
                 .map(|s| (s.width as i32, s.height as i32))
                 .unwrap_or((264, 64));
-            // Bottom-center, just above the taskbar: horizontally centered,
-            // vertically clear of the taskbar (~48px) plus margin.
+            // Bottom-center. Clamp the bottom edge to the work area when the
+            // frontend can tell us where it ends (16px clearance); otherwise
+            // keep the screen-bottom heuristic. Either way never past the
+            // monitor's own bottom edge.
             let x = m_pos.x + (m_size.width as i32 - w) / 2;
-            let y = m_pos.y + m_size.height as i32 - h - 80;
+            let screen_bottom = m_pos.y + m_size.height as i32;
+            let y = match work_bottom {
+                Some(bottom) => bottom
+                    .min(screen_bottom)
+                    .saturating_sub(h + 16)
+                    .max(m_pos.y),
+                None => screen_bottom.saturating_sub(h + 80).max(m_pos.y),
+            };
             let _ =
                 window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
         }
@@ -70,7 +84,7 @@ pub fn toggle_widget(app: AppHandle) -> Result<bool, String> {
         hide_widget(app)?;
         Ok(false)
     } else {
-        show_widget(app)?;
+        show_widget(app, None)?;
         Ok(true)
     }
 }
