@@ -107,6 +107,8 @@ export default function HistoryPage({ onBack }: Props) {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<number[]>([]);
   const [modeFilter, setModeFilter] = useState<string>("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const loadHistory = useCallback(async (search?: string) => {
@@ -140,8 +142,17 @@ export default function HistoryPage({ onBack }: Props) {
     if (modeFilter !== "all") {
       result = result.filter((r) => r.mode === modeFilter);
     }
+    if (dateFrom || dateTo) {
+      result = result.filter((r) => {
+        const d = new Date(r.created_at + (r.created_at.includes("Z") ? "" : "Z"));
+        if (isNaN(d.getTime())) return true;
+        if (dateFrom && d < new Date(dateFrom + "T00:00:00Z")) return false;
+        if (dateTo && d > new Date(dateTo + "T23:59:59Z")) return false;
+        return true;
+      });
+    }
     return result;
-  }, [allRows, searchQuery, modeFilter]);
+  }, [allRows, searchQuery, modeFilter, dateFrom, dateTo]);
 
   // Visible rows (pagination)
   const visibleRows = useMemo(
@@ -343,6 +354,42 @@ export default function HistoryPage({ onBack }: Props) {
               ))}
             </select>
           </div>
+        )}
+        <div className="flex items-center gap-1.5">
+          <Calendar size={14} className="text-text-muted" />
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => {
+              setDateFrom(e.target.value);
+              setVisibleCount(PAGE_SIZE);
+            }}
+            aria-label="Filter from date"
+            className="h-10 rounded-[12px] border border-border bg-app-surface-secondary px-2 text-[13px] text-text-primary focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+          />
+          <span className="text-[13px] text-text-muted">to</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => {
+              setDateTo(e.target.value);
+              setVisibleCount(PAGE_SIZE);
+            }}
+            aria-label="Filter to date"
+            className="h-10 rounded-[12px] border border-border bg-app-surface-secondary px-2 text-[13px] text-text-primary focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+          />
+        </div>
+        {(dateFrom || dateTo) && (
+          <button
+            onClick={() => {
+              setDateFrom("");
+              setDateTo("");
+              setVisibleCount(PAGE_SIZE);
+            }}
+            className="text-[13px] text-text-muted hover:text-text-primary"
+          >
+            Clear dates
+          </button>
         )}
         {searchQuery && (
           <button
