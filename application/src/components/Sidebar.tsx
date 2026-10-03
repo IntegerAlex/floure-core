@@ -1,6 +1,6 @@
 import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
-import { Home, BarChart3, BookOpen, Clock, SlidersHorizontal, Settings, Cpu } from "lucide-react";
+import { Home, BarChart3, BookOpen, Clock, Settings, Cpu } from "lucide-react";
 
 interface SidebarItemProps {
   icon: React.ReactNode;
@@ -99,12 +99,6 @@ export const Sidebar = forwardRef<HTMLDivElement, SidebarProps>(
             label="History"
             active={activeItem === "History"}
             onClick={() => onNavigate?.("History")}
-          />
-          <SidebarItem
-            icon={<SlidersHorizontal size={18} />}
-            label="Config"
-            active={activeItem === "Config"}
-            onClick={() => onNavigate?.("Config")}
           />
           <SidebarItem
             icon={<Cpu size={18} />}

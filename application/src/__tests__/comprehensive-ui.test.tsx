@@ -507,8 +507,9 @@ describe("Sidebar", () => {
     expect(screen.getByText("Insights")).toBeInTheDocument();
     expect(screen.getByText("Dictionary")).toBeInTheDocument();
     expect(screen.getByText("History")).toBeInTheDocument();
-    expect(screen.getByText("Config")).toBeInTheDocument();
     expect(screen.getByText("Models")).toBeInTheDocument();
+    // "Config" and "Settings" both opened the same panel; they are one item now.
+    expect(screen.queryByText("Config")).not.toBeInTheDocument();
     // No Widget toggle: the pill auto-shows on PTT instead.
     expect(screen.queryByText("Widget")).not.toBeInTheDocument();
     expect(screen.getByText("Settings")).toBeInTheDocument();
@@ -631,106 +632,50 @@ describe("SettingsPanel", () => {
     language: "",
   };
 
-  it("renders nothing when not visible", () => {
-    const { container } = renderWithProviders(
-      <SettingsPanel
-        settings={defaultSettings}
-        onSave={() => {}}
-        visible={false}
-        onClose={() => {}}
-      />,
-    );
-    expect(container.innerHTML).toBe("");
+  it("renders as a page, not a modal", () => {
+    renderWithProviders(<SettingsPanel settings={defaultSettings} onSave={() => {}} />);
+    // Settings is a destination in the shell now, so it must not claim dialog
+    // semantics -- that was the inconsistency the modal caused.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /settings/i })).toBeInTheDocument();
   });
 
-  it("renders dialog when visible", () => {
-    renderWithProviders(
-      <SettingsPanel
-        settings={defaultSettings}
-        onSave={() => {}}
-        visible={true}
-        onClose={() => {}}
-      />,
-    );
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+  it("disables Save until something changes, then offers Discard", async () => {
+    renderWithProviders(<SettingsPanel settings={defaultSettings} onSave={() => {}} />);
+    expect(screen.getByRole("button", { name: /save & apply/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /^discard$/i })).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Language"), "de");
+
+    expect(screen.getByRole("button", { name: /save & apply/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^discard$/i })).toBeInTheDocument();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
   });
 
-  it("closes on Escape key", async () => {
-    // Escape handling is native (the platform closes a modal <dialog> and
-    // fires `close`); jsdom implements neither, so drive the contract directly.
-    const onClose = vi.fn();
-    renderWithProviders(
-      <SettingsPanel
-        settings={defaultSettings}
-        onSave={() => {}}
-        visible={true}
-        onClose={onClose}
-      />,
-    );
-    fireEvent(screen.getByRole("dialog"), new Event("close"));
-    expect(onClose).toHaveBeenCalled();
+  it("discards edits back to the saved settings", async () => {
+    renderWithProviders(<SettingsPanel settings={defaultSettings} onSave={() => {}} />);
+    await userEvent.selectOptions(screen.getByLabelText("Language"), "de");
+    await userEvent.click(screen.getByRole("button", { name: /^discard$/i }));
+    expect(screen.getByRole("button", { name: /save & apply/i })).toBeDisabled();
   });
 
-  it("closes when clicking backdrop", async () => {
-    const onClose = vi.fn();
-    renderWithProviders(
-      <SettingsPanel
-        settings={defaultSettings}
-        onSave={() => {}}
-        visible={true}
-        onClose={onClose}
-      />,
-    );
-    const dialog = screen.getByRole("dialog");
-    // Click on the backdrop (the dialog element itself, not the inner panel)
-    fireEvent.click(dialog);
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it("calls onSave with updated settings", async () => {
+  it("calls onSave with the edited settings", async () => {
     const onSave = vi.fn();
-    renderWithProviders(
-      <SettingsPanel
-        settings={defaultSettings}
-        onSave={onSave}
-        visible={true}
-        onClose={() => {}}
-      />,
-    );
-    await userEvent.click(screen.getByText("Save & Apply"));
-    expect(onSave).toHaveBeenCalled();
+    renderWithProviders(<SettingsPanel settings={defaultSettings} onSave={onSave} />);
+    await userEvent.selectOptions(screen.getByLabelText("Language"), "de");
+    await userEvent.click(screen.getByRole("button", { name: /save & apply/i }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].language).toBe("de");
   });
 
   it("shows/hides API keys", async () => {
-    renderWithProviders(
-      <SettingsPanel
-        settings={defaultSettings}
-        onSave={() => {}}
-        visible={true}
-        onClose={() => {}}
-      />,
-    );
+    renderWithProviders(<SettingsPanel settings={defaultSettings} onSave={() => {}} />);
     const openrouterInput = screen.getByLabelText("OpenRouter API Key");
     expect(openrouterInput).toHaveAttribute("type", "password");
 
     const showToggle = screen.getByLabelText("Show API keys");
     await userEvent.click(showToggle);
     expect(openrouterInput).toHaveAttribute("type", "text");
-  });
-
-  it("has aria-modal and aria-label", () => {
-    renderWithProviders(
-      <SettingsPanel
-        settings={defaultSettings}
-        onSave={() => {}}
-        visible={true}
-        onClose={() => {}}
-      />,
-    );
-    const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(dialog).toHaveAttribute("aria-label", "Settings");
   });
 });
 
@@ -1328,7 +1273,7 @@ describe("Accessibility: ARIA attributes", () => {
     expect(screen.getByRole("button")).toHaveAttribute("aria-label");
   });
 
-  it("SettingsPanel has role=dialog", () => {
+  it("SettingsPanel is a page, not a dialog", () => {
     renderWithProviders(
       <SettingsPanel
         settings={{
@@ -1343,11 +1288,10 @@ describe("Accessibility: ARIA attributes", () => {
           language: "",
         }}
         onSave={() => {}}
-        visible={true}
-        onClose={() => {}}
       />,
     );
-    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /settings/i })).toBeInTheDocument();
   });
 
   it("MicPermissionModal has role=dialog", () => {

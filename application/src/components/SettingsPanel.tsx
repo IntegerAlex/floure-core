@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Settings,
-  X,
   Bot,
   KeyRound,
   Mic,
@@ -12,15 +11,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/hooks/usePermissions";
-import Dialog from "./Dialog";
 import type { RuntimeSettings } from "../lib/settings";
 import { getStoredHotkey, HOTKEY_STORAGE_KEY } from "../lib/settings";
 
 interface Props {
   settings: RuntimeSettings;
   onSave: (s: RuntimeSettings) => void;
-  visible: boolean;
-  onClose: () => void;
 }
 
 const HOTKEY_OPTIONS = [
@@ -66,10 +62,10 @@ const SECTIONS = [
   },
 ] as const;
 
-export default function SettingsPanel({ settings, onSave, visible, onClose }: Props) {
+export default function SettingsPanel({ settings, onSave }: Props) {
   const [local, setLocal] = useState<RuntimeSettings>({ ...settings });
   const [showKeys, setShowKeys] = useState(false);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [hotkey, setHotkey] = useState(() => getStoredHotkey());
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedDiag, setCopiedDiag] = useState(false);
@@ -85,27 +81,18 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
     setLocal({ ...settings });
   }, [settings]);
 
+  // Re-read the stored hotkey whenever the page is (re)opened, so a change
+  // made elsewhere is reflected rather than showing a stale binding.
   useEffect(() => {
-    if (visible) {
-      setHotkey(getStoredHotkey());
-      setConfirmDiscard(false);
-      setSearchQuery("");
-    }
-  }, [visible]);
+    setHotkey(getStoredHotkey());
+  }, []);
 
-  if (!visible) return null;
-
-  // Closing discards edits with no undo, so the first Close asks and the
-  // second one commits — same "confirm a discard" contract as a beforeunload
-  // guard, without nesting a dialog inside this one.
   const dirty = JSON.stringify(local) !== JSON.stringify(settings);
-  const handleClose = () => {
-    if (dirty && !confirmDiscard) {
-      setConfirmDiscard(true);
-      return;
-    }
-    setConfirmDiscard(false);
-    onClose();
+  const handleSave = () => {
+    localStorage.setItem(HOTKEY_STORAGE_KEY, hotkey);
+    onSave(local);
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 2000);
   };
 
   const update = (patch: Partial<RuntimeSettings>) => setLocal((s) => ({ ...s, ...patch }));
@@ -134,30 +121,41 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
   const checkHint = "text-small text-text-muted";
 
   return (
-    <Dialog
-      onClose={handleClose}
-      label="Settings"
-      className="flex max-h-[85vh] max-w-lg flex-col overflow-hidden bg-app-surface"
-    >
-      <div className="flex items-center justify-between border-b border-border px-6 py-4">
-        <h2 className="flex items-center gap-2 text-balance text-heading text-text-primary">
-          <Settings size={18} className="text-text-secondary" />
-          Settings
-        </h2>
-        <button
-          className={cn(
-            "inline-flex h-8 items-center justify-center rounded-button px-3 text-small font-medium transition-colors duration-200",
-            "border border-border bg-app-surface text-text-primary hover:bg-app-hover",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
+    <div className="flex flex-1 flex-col overflow-hidden p-6">
+      {/* Page header: same shape as History/Models, so Settings reads as a
+          destination rather than an overlay. */}
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="flex items-center gap-2 text-balance text-[32px] font-semibold text-text-primary">
+            <Settings size={26} className="text-text-secondary" />
+            Settings
+          </h2>
+          {dirty && (
+            <span className="rounded-badge border border-accent-muted-border bg-accent-muted px-2 py-0.5 text-[11px] font-semibold text-accent-active">
+              Unsaved changes
+            </span>
           )}
-          onClick={handleClose}
-          aria-label={confirmDiscard ? "Discard settings changes" : "Close settings"}
-        >
-          <X size={14} /> {confirmDiscard ? "Discard?" : "Close"}
-        </button>
+        </div>
+        <div className="flex items-center gap-2">
+          {dirty && (
+            <button
+              onClick={() => setLocal({ ...settings })}
+              className="inline-flex h-9 items-center rounded-button border border-border bg-app-surface px-4 text-small font-medium text-text-secondary transition-colors hover:bg-app-hover hover:text-text-primary"
+            >
+              Discard
+            </button>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={!dirty}
+            className="inline-flex h-9 items-center rounded-button bg-accent px-4 text-small font-medium text-white shadow-accent-button transition-colors hover:bg-accent-warm disabled:pointer-events-none disabled:opacity-50"
+          >
+            {saved ? "Saved" : "Save & Apply"}
+          </button>
+        </div>
       </div>
       {/* Search + section anchors */}
-      <div className="flex items-center gap-2 border-b border-border px-6 py-3">
+      <div className="mb-3 flex items-center gap-2">
         <Search size={15} className="shrink-0 text-text-muted" />
         <input
           type="text"
@@ -178,7 +176,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
           </button>
         )}
       </div>
-      <div className="flex flex-wrap gap-1.5 px-6 py-3">
+      <div className="mb-4 flex flex-wrap gap-1.5">
         {visibleSections.map((s) => (
           <button
             key={s.id}
@@ -192,7 +190,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
           <p className="text-small text-text-muted">No settings match “{searchQuery}”.</p>
         )}
       </div>
-      <div className="flex max-h-[60vh] flex-col gap-6 overflow-y-auto overscroll-contain px-6 py-4">
+      <div className="flex flex-1 flex-col gap-6 overflow-y-auto overscroll-contain pr-1">
         <div
           ref={(el) => {
             sectionRefs.current.speech = el;
@@ -565,23 +563,6 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
           </div>
         </div>
       </div>
-      <div className="flex items-center justify-end border-t border-border px-6 py-4">
-        <button
-          className={cn(
-            "inline-flex h-11 items-center justify-center rounded-button px-4 py-2 text-body font-medium transition-colors duration-200",
-            "bg-accent text-white shadow-accent-button hover:bg-accent-warm",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
-            "disabled:pointer-events-none disabled:opacity-50",
-          )}
-          onClick={() => {
-            localStorage.setItem(HOTKEY_STORAGE_KEY, hotkey);
-            onSave(local);
-            onClose();
-          }}
-        >
-          Save & Apply
-        </button>
-      </div>
-    </Dialog>
+    </div>
   );
 }

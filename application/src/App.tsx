@@ -21,7 +21,6 @@ import { getStoredHotkey } from "./lib/settings";
 function App() {
   const { settings, setSettings, syncError } = useSettings();
   const [toast, setToast] = useState("");
-  const [showSettings, setShowSettings] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [showMicModal, setShowMicModal] = useState(false);
   const [view, setView] = useState<AppView>(
@@ -370,16 +369,24 @@ function App() {
 
   const handleNavigate = (item: string) => {
     setActiveItem(item);
-    if (item === "Settings" || item === "Config") {
-      setShowSettings(true);
-    }
   };
 
   const content = (() => {
     switch (activeItem) {
       case "Config":
       case "Settings":
-        return null;
+        return (
+          <SettingsPanel
+            settings={settings}
+            onSave={async (s) => {
+              setSettings(s);
+              setSettingsVersion((v) => v + 1); // Trigger engine respawn with new CLI args
+              if (connectedRef.current) {
+                stopRef.current();
+              }
+            }}
+          />
+        );
       case "Insights":
         return <InsightsPage />;
       case "Dictionary":
@@ -431,26 +438,11 @@ function App() {
           {toast}
         </div>
       )}
-      <SettingsPanel
-        visible={showSettings}
-        settings={settings}
-        onSave={async (s) => {
-          setSettings(s);
-          setSettingsVersion((v) => v + 1); // Trigger engine respawn with new CLI args
-          if (connectedRef.current) {
-            stopRef.current();
-          }
-        }}
-        onClose={() => {
-          setShowSettings(false);
-          setActiveItem("Home");
-        }}
-      />
       <MicPermissionModal
         visible={showMicModal}
         onOpenConfig={() => {
           setShowMicModal(false);
-          setShowSettings(true);
+          setActiveItem("Settings");
         }}
         onClose={() => setShowMicModal(false)}
       />
