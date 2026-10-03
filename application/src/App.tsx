@@ -109,6 +109,16 @@ function App() {
       } catch {
         /* not in Tauri */
       }
+      // Tray icon state (research §7 rec 1): a non-visual recording indicator
+      // independent of the animated pill.
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("set_tray_state", {
+          recording: status === "listening" || status === "transcribing" || status === "rewriting",
+        });
+      } catch {
+        /* not in Tauri or no tray */
+      }
     })();
   }, [status]);
 
