@@ -73,6 +73,11 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
   const [hotkey, setHotkey] = useState(() => getStoredHotkey());
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedDiag, setCopiedDiag] = useState(false);
+  const [copiedLoopback, setCopiedLoopback] = useState(false);
+  // Wayland has no core key-grab, so a registered global shortcut often never
+  // fires. The loopback control server is the reliable trigger there.
+  const isLinux =
+    typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("linux");
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const { permissions, requestClipboard, requestMic, isCapturingMic, stopMic } = usePermissions();
 
@@ -443,6 +448,34 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
             </select>
             <p className="text-small text-text-muted">Hold to record, release to commit text.</p>
           </div>
+          {isLinux && (
+            <div className="flex flex-col gap-2 rounded-card border border-border bg-app-surface-secondary p-3">
+              <p className="text-small text-text-secondary">
+                On Wayland a compositor may ignore global hotkeys entirely. Floure runs a local
+                control server that always works — bind a compositor key to it:
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-[6px] bg-app-surface px-2 py-1.5 text-[12px] text-text-primary">
+                  curl -X POST localhost:17833/toggle
+                </code>
+                <button
+                  onClick={async () => {
+                    const { copyToClipboard } = await import("@/lib/clipboard");
+                    setCopiedLoopback(await copyToClipboard("curl -X POST localhost:17833/toggle"));
+                  }}
+                  className="inline-flex h-8 shrink-0 items-center rounded-button border border-border bg-app-surface px-3 text-small font-medium text-text-primary transition-colors hover:bg-app-hover"
+                >
+                  {copiedLoopback ? "Copied!" : "Copy"}
+                </button>
+              </div>
+              <p className="text-small text-text-muted">
+                Sway/Hyprland:{" "}
+                <code className="rounded-[4px] bg-app-surface px-1.5 py-0.5">
+                  bindsym $mod+d exec "curl -X POST localhost:17833/toggle"
+                </code>
+              </p>
+            </div>
+          )}
         </div>
 
         <div

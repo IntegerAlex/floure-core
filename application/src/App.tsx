@@ -273,6 +273,12 @@ function App() {
         console.log(`[PTT] Global shortcut registered: ${savedHotkey}`);
       } catch (e) {
         console.warn("[PTT] Failed to register global shortcut:", e);
+        // On Wayland (and any compositor that refuses the binding) the shortcut
+        // silently never fires. Point at the control server rather than leaving
+        // the user with a hotkey that does nothing.
+        setToast(
+          "Global hotkey unavailable — bind a compositor key to localhost:17833/toggle, or use the tray",
+        );
       }
     })();
     return () => {
