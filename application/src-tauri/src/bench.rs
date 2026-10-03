@@ -2,7 +2,7 @@
 //!
 //! Run:
 //!   BENCH_AUDIO=/home/akshat/practice/stt/benchmark-audio \
-//!     cargo test -p stt-ui --lib bench -- --ignored --nocapture
+//!     cargo test -p floure --lib bench -- --ignored --nocapture
 //!
 //! Feeds every manifest wav through Parakeet-int8 and Whisper-base, writes
 //! per-utterance hypotheses + aggregate WER/latency to

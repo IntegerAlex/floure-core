@@ -45,7 +45,7 @@ run_test() {
     fi
 }
 
-run_test "App binary exists" "test -f '$TAURI_DIR/target/debug/stt-ui'"
+run_test "App binary exists" "test -f '$TAURI_DIR/target/debug/floure'"
 
 run_test "Frontend dev server serves HTML" \
     "timeout 20 bash -c 'cd $APP_DIR && npx vite --port 5173 &>/tmp/vite_smoke.log & sleep 5 && curl -sf http://localhost:5173 | grep -qi html && kill %1 2>/dev/null'"

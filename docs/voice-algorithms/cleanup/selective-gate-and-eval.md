@@ -614,9 +614,9 @@ with low expected power.
 
 ```
 BENCH_AUDIO=/home/akshat/practice/stt/benchmark-audio \
-  cargo test -p stt-ui --lib bench -- --ignored --nocapture      # existing, unchanged
+  cargo test -p floure --lib bench -- --ignored --nocapture      # existing, unchanged
 BENCH_AUDIO=.../benchmark-audio BENCH_GATE=heuristic \
-  cargo test -p stt-ui --lib bench_gate_eval -- --ignored --nocapture   # new
+  cargo test -p floure --lib bench_gate_eval -- --ignored --nocapture   # new
 BENCH_AUDIO=.../benchmark-audio/mumbled  ...                     # same test, tier-2 manifest
 ```
 

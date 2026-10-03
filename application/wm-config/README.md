@@ -23,10 +23,10 @@ Use Sway's move commands (e.g., `$mod+Shift+drag`) to reposition the widget.
 Add to `~/.config/hypr/hyprland.conf`:
 
 ```
-windowrulev2 = float, class:^(stt-ui)$
-windowrulev2 = pin, class:^(stt-ui)$
-windowrulev2 = noanim, class:^(stt-ui)$
-windowrulev2 = size 264 64, class:^(stt-ui)$
+windowrulev2 = float, class:^(floure)$
+windowrulev2 = pin, class:^(floure)$
+windowrulev2 = noanim, class:^(floure)$
+windowrulev2 = size 264 64, class:^(floure)$
 ```
 
 ### Hyprland hotkey + Waybar (dictation)
@@ -47,7 +47,7 @@ hit the same local endpoint so they can't desync.
 Add to `~/.config/i3/config`:
 
 ```
-for_window [class="stt-ui"] floating enable, sticky enable, border pixel 0
+for_window [class="floure"] floating enable, sticky enable, border pixel 0
 ```
 
 ### GNOME / KDE / Windows / macOS
