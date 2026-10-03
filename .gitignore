@@ -25,6 +25,8 @@ venv/
 node_modules/
 **/node_modules/
 website
+# SaaS demo video project (fframes; large build artefacts, re-renderable)
+video-demo
 # Optional: Ignore npm lock file if you are using pnpm
 package-lock.json
 
