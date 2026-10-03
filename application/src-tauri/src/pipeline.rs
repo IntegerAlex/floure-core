@@ -14,6 +14,23 @@ use crate::parakeet::ParakeetRecognizer;
 use crate::vad::VoiceActivityDetector;
 use crate::whisper::WhisperRecognizer;
 
+/// Silence fed at stop to force-close the trailing VAD segment, in ms.
+///
+/// The VAD needs `min_silence_duration` (0.25s) to close, and WER stops
+/// improving past ~0.6s of trailing silence, so 0.7s deliberately overshoots
+/// the minimum: a segment still open when the worker exits is lost, while a
+/// slightly longer pad only costs latency.
+const FLUSH_SILENCE_MS: u32 = 700;
+
+/// Samples of silence to feed at stop, derived from the *capture* rate.
+///
+/// Never a fixed count: the old literal of 8000 was 500ms at 16 kHz but only
+/// ~167ms at 48 kHz — under the VAD's close threshold, so the last words were
+/// silently dropped on high-rate microphones.
+fn flush_silence_samples(sample_rate: u32) -> usize {
+    (sample_rate as usize * FLUSH_SILENCE_MS as usize) / 1000
+}
+
 static PIPELINE_RUNNING: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
 
 /// Monotonic run id, bumped on every stop and every start.
@@ -831,12 +848,9 @@ impl PipelineController {
                     while let Ok(samples) = rx.try_recv() {
                         pump(&samples);
                     }
-                    // 0.5s of silence *at the capture rate*. `pump` resamples,
-                    // so a fixed 8000 samples is only 500ms on a 16kHz mic but
-                    // ~167ms on a 48kHz one — under the VAD's 0.25s
-                    // `min_silence_duration`, which left the trailing segment
-                    // open and dropped it here.
-                    pump(&vec![0.0f32; mic_sample_rate as usize / 2]);
+                    // Silence *at the capture rate*, never a fixed count: see
+                    // flush_silence_samples.
+                    pump(&vec![0.0f32; flush_silence_samples(mic_sample_rate)]);
                     break;
                 }
                 match rx.recv_timeout(std::time::Duration::from_millis(50)) {
@@ -933,5 +947,67 @@ mod run_id_tests {
         other.llm_model = "openai/gpt-4o-mini".to_string();
         assert_ne!(key, engine_key(&other), "llm model must change the key");
         assert_eq!(key, engine_key(&base), "same config must reuse");
+    }
+}
+
+#[cfg(test)]
+mod flush_tests {
+    use super::flush_silence_samples;
+    use crate::vad::MIN_SILENCE_SECS;
+
+    /// The regression this guards: a fixed 8000-sample flush was 500ms at
+    /// 16 kHz but only ~167ms at 48 kHz — under the VAD's close threshold, so
+    /// the trailing segment stayed open and was dropped. The flush must be
+    /// derived from the negotiated rate and clear the threshold at every rate.
+    #[test]
+    fn flush_silence_closes_the_trailing_segment_at_every_rate() {
+        for rate in [8_000u32, 16_000, 22_050, 44_100, 48_000, 96_000] {
+            let secs = flush_silence_samples(rate) as f32 / rate as f32;
+            assert!(
+                secs >= MIN_SILENCE_SECS,
+                "{rate} Hz: flush is {secs}s, under the VAD's {MIN_SILENCE_SECS}s close threshold"
+            );
+            assert!(
+                secs >= 0.6,
+                "{rate} Hz: flush {secs}s is below the ~0.6s WER plateau"
+            );
+        }
+    }
+
+    #[test]
+    fn the_old_fixed_sample_count_would_have_failed_at_high_rates() {
+        // Documents why the fix exists: the literal was fine on the developer's
+        // 16 kHz mic and broken on everyone else's 48 kHz one.
+        assert!(
+            8000.0 / 16_000.0 >= MIN_SILENCE_SECS,
+            "8000 was fine at 16 kHz"
+        );
+        assert!(8000.0 / 48_000.0 < MIN_SILENCE_SECS, "and broken at 48 kHz");
+    }
+
+    /// Length preservation: resampling must not change the duration. 48 kHz to
+    /// 16 kHz is exactly 1/3, so 100 ms in must be ~100 ms out.
+    ///
+    /// This also pins down a real quirk of `LinearResampler`: a `flush: false`
+    /// call withholds a few samples of tail for interpolation continuity. The
+    /// pipeline never flushes explicitly, but the 700 ms of silence fed at stop
+    /// is the next `resample` call, so those samples are absorbed rather than
+    /// lost — and the withheld tail is under one VAD window (32 ms) anyway.
+    #[test]
+    fn resampling_preserves_duration_once_flushed() {
+        let Some(r) = sherpa_onnx::LinearResampler::create(48_000, 16_000) else {
+            return; // native library unavailable; nothing to assert
+        };
+        let input = vec![0.0f32; 4_800];
+        let streamed = r.resample(&input, false);
+        let tail = r.resample(&[], true);
+        let total = (streamed.len() + tail.len()) as i64;
+        let expected = 1_600i64;
+        assert!(
+            (total - expected).abs() <= 1,
+            "flushed total should be ~{expected}, got {total} (streamed {}, tail {})",
+            streamed.len(),
+            tail.len()
+        );
     }
 }
