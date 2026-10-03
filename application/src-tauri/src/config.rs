@@ -137,6 +137,49 @@ pub struct SettingsUpdate {
 /// space-separated string. Normalise at this boundary so the decode path stays
 /// a straight pass-through, and cap the length so a runaway paste cannot blow
 /// up the beam search.
+/// Dictionary replacements to bias decoding toward, favourites first.
+///
+/// The dictionary and the decode bias were separate features: adding a word
+/// there stored it but never reached the recogniser, so a user's corrections
+/// changed nothing about future transcriptions. Feeding corrections back is the
+/// evidence-backed way to reduce repeat errors (>10% relative WER, Yu et al.
+/// 2004), and this is that loop. `replacement` is the field to bias on: the UI
+/// renders `phrase -> replacement`, so the replacement is the form the user
+/// wants produced.
+///
+/// Best-effort and capped: a missing or unreadable database yields no bias
+/// rather than failing the pipeline, and the cap keeps a large dictionary from
+/// blowing up the beam search.
+pub fn dictionary_hotwords() -> String {
+    let Ok(conn) = rusqlite::Connection::open(history_db_path()) else {
+        return String::new();
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT replacement FROM dictionary_entries
+         WHERE replacement != '' ORDER BY is_favorite DESC, use_count DESC, updated_at DESC
+         LIMIT 100",
+    ) else {
+        return String::new();
+    };
+    let words: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    normalize_hotwords(&words.join(" "))
+}
+
+/// The config with the user's dictionary merged into its decode bias.
+///
+/// Applied wherever `engine_key` is computed, so a dictionary change is part of
+/// the cache key and triggers exactly one recogniser rebuild.
+pub fn with_dictionary_hotwords(mut config: AppConfig) -> AppConfig {
+    let dict = dictionary_hotwords();
+    if !dict.is_empty() {
+        config.hotwords = normalize_hotwords(&format!("{} {}", config.hotwords, dict));
+    }
+    config
+}
+
 pub fn normalize_hotwords(raw: &str) -> String {
     raw.split(|c: char| c == ',' || c.is_whitespace())
         .filter(|w| !w.is_empty())

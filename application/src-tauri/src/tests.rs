@@ -25,6 +25,67 @@ mod tests {
         std::env::remove_var("STT_DATA_DIR");
     }
 
+    /// The correction loop: a dictionary entry must reach the decode bias.
+    ///
+    /// Before this, adding a word stored it but never influenced recognition --
+    /// the dictionary and the hotword bias were separate features, so a user's
+    /// corrections changed nothing about future transcriptions.
+    #[test]
+    fn dictionary_entries_merge_into_the_decode_bias() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("floure-dict-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("STT_DATA_DIR", &dir);
+
+        let conn = Connection::open(crate::config::history_db_path()).unwrap();
+        crate::ensure_dict_table(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO dictionary_entries (phrase, replacement, is_favorite) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["calico", "Calico", 1i64],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO dictionary_entries (phrase, replacement) VALUES (?1, ?2)",
+            rusqlite::params!["cube control", "kubectl"],
+        )
+        .unwrap();
+        drop(conn);
+
+        // The bias carries the *replacement* -- the form the user wants produced.
+        let dict = crate::config::dictionary_hotwords();
+        assert!(
+            dict.contains("Calico"),
+            "favourite replacement missing: {dict}"
+        );
+        assert!(
+            dict.contains("kubectl"),
+            "plain replacement missing: {dict}"
+        );
+        assert!(
+            dict.find("Calico") < dict.find("kubectl"),
+            "favourite should sort first: {dict}"
+        );
+
+        // Merged with the manual hotwords, not replacing them.
+        let mut cfg = crate::config::AppConfig::default();
+        cfg.hotwords = "Floure".to_string();
+        let merged = crate::config::with_dictionary_hotwords(cfg);
+        assert!(
+            merged.hotwords.contains("Floure"),
+            "manual hotword lost: {}",
+            merged.hotwords
+        );
+        assert!(
+            merged.hotwords.contains("Calico"),
+            "dictionary lost: {}",
+            merged.hotwords
+        );
+
+        std::env::remove_var("STT_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn test_history_db_path_fallback_home() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());

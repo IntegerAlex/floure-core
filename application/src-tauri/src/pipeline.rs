@@ -107,7 +107,7 @@ pub fn is_warming() -> bool {
 
 /// True when the cache already holds engines for the on-disk config.
 pub fn is_ready() -> bool {
-    let config = AppConfig::load();
+    let config = crate::config::with_dictionary_hotwords(AppConfig::load());
     let key = engine_key(&config);
     ENGINE_CACHE
         .lock()
@@ -472,6 +472,8 @@ fn build_recognizers(
 /// A press landing mid-warm simply builds its own set; the overlap falls
 /// back gracefully and the next press hits the cache.
 pub fn warm_engines(app: tauri::AppHandle, config: AppConfig) {
+    // Merge first: the warm cache key must match what a press will compute.
+    let config = crate::config::with_dictionary_hotwords(config);
     WARMING.store(true, Ordering::SeqCst);
     let _guard = WarmGuard;
     let key = engine_key(&config);
@@ -518,6 +520,9 @@ pub struct PipelineController {
 
 impl PipelineController {
     pub fn new(app: tauri::AppHandle, config: AppConfig) -> Result<Self> {
+        // Merge the dictionary into the decode bias so a press computes the
+        // same engine key the warm cache stored.
+        let config = crate::config::with_dictionary_hotwords(config);
         let running = get_running_flag().clone();
         let model_dir = config.model_dir.clone();
         let silero_path = model_dir.join("silero-vad").join("silero_vad.onnx");
