@@ -46,6 +46,14 @@ pub struct AppConfig {
     #[serde(default = "default_llm_model")]
     pub llm_model: String,
     pub selected_mic_index: Option<usize>,
+    /// Stable, driver-level device id, preferred over `selected_mic_index`.
+    ///
+    /// The index is positional: replug a USB mic or connect a headset and it
+    /// silently points at a different device. The id is the backend's own
+    /// identifier, so it survives reordering. Kept alongside the index for
+    /// configs written before this field existed.
+    #[serde(default)]
+    pub selected_mic_id: Option<String>,
     pub typing_enabled: bool,
     pub clipboard_enabled: bool,
     /// Space-separated vocabulary to bias decoding toward. Empty disables the
@@ -92,6 +100,7 @@ impl Default for AppConfig {
             llm_mode: LlmMode::default(),
             llm_model: default_llm_model(),
             selected_mic_index: None,
+            selected_mic_id: None,
             typing_enabled: true,
             clipboard_enabled: true,
             hotwords: String::new(),

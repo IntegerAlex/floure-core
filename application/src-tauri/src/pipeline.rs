@@ -638,10 +638,22 @@ impl PipelineController {
 
         let (tx, rx) = mpsc::channel::<Vec<f32>>();
 
-        let mic_name: Option<String> = self.config.selected_mic_index.and_then(|i| {
-            crate::audio::list_input_devices()
-                .ok()
-                .and_then(|devices| devices.get(i).map(|(name, _)| name.clone()))
+        // Prefer the stable device id; fall back to the positional index for
+        // configs written before `selected_mic_id` existed. `start_capture`
+        // matches by id, then by name, then falls back to the default device,
+        // so a stale selection degrades instead of refusing to record.
+        let mic_hint: Option<String> = self.config.selected_mic_id.clone().or_else(|| {
+            self.config.selected_mic_index.and_then(|i| {
+                crate::audio::list_input_devices().ok().and_then(|devices| {
+                    devices.get(i).map(|(name, id)| {
+                        if id.is_empty() {
+                            name.clone()
+                        } else {
+                            id.clone()
+                        }
+                    })
+                })
+            })
         });
 
         let app_clone = self.app.clone();
@@ -649,27 +661,47 @@ impl PipelineController {
         let running_clone = self.running.clone();
         let silero_path = self.silero_path.clone();
 
-        let audio =
-            match crate::audio::start_capture(mic_name.as_deref(), move |samples: &[f32]| {
+        // A stream that dies mid-capture (unplugged mic, Bluetooth profile
+        // switch) must not leave the worker typing from a frozen buffer. Stop
+        // the run so it flushes what it has and exits, and tell the user.
+        let on_stream_error = {
+            let app = app_clone.clone();
+            let running = running_clone.clone();
+            move |msg: String| {
+                running.store(false, Ordering::SeqCst);
+                let _ = app.emit(
+                    "asr_error",
+                    serde_json::json!({
+                        "error": format!("Microphone stopped ({msg}). Reconnect it and try again.")
+                    }),
+                );
+            }
+        };
+
+        let audio = match crate::audio::start_capture(
+            mic_hint.as_deref(),
+            move |samples: &[f32]| {
                 let _ = tx.send(samples.to_vec());
-            }) {
-                Ok(a) => {
-                    eprintln!(
-                        "[pipeline] capturing from {:?} @ {}Hz",
-                        mic_name.as_deref().unwrap_or("<default>"),
-                        a.sample_rate
-                    );
-                    a
-                }
-                Err(e) => {
-                    let _ = app_clone.emit(
-                        "asr_error",
-                        serde_json::json!({"error": format!("Audio device error: {}", e)}),
-                    );
-                    running_clone.store(false, Ordering::SeqCst);
-                    return Ok(());
-                }
-            };
+            },
+            on_stream_error,
+        ) {
+            Ok(a) => {
+                eprintln!(
+                    "[pipeline] capturing from {:?} @ {}Hz",
+                    mic_hint.as_deref().unwrap_or("<default>"),
+                    a.sample_rate
+                );
+                a
+            }
+            Err(e) => {
+                let _ = app_clone.emit(
+                    "asr_error",
+                    serde_json::json!({"error": format!("Audio device error: {}", e)}),
+                );
+                running_clone.store(false, Ordering::SeqCst);
+                return Ok(());
+            }
+        };
 
         let mic_sample_rate = audio.sample_rate;
 
