@@ -4,6 +4,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 pub struct AudioCapture {
     _stream: cpal::Stream,
     pub sample_rate: u32,
+    /// Negotiated channel count. The buffer is interleaved, so the downmix
+    /// needs it, and the diagnostics record wants it.
+    pub channels: u16,
+    /// Negotiated sample format, recorded for environment diagnosis.
+    pub format: String,
 }
 
 /// Normalise a raw device sample to `f32` in approximately `[-1, 1]`.
@@ -296,6 +301,8 @@ where
     Ok(AudioCapture {
         _stream: stream,
         sample_rate,
+        channels: channels as u16,
+        format: format!("{sample_format:?}"),
     })
 }
 

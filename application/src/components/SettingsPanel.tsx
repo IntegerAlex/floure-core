@@ -1,5 +1,15 @@
-import { useState, useEffect } from "react";
-import { Settings, X, Bot, KeyRound, Mic, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import {
+  Settings,
+  X,
+  Bot,
+  KeyRound,
+  Mic,
+  ShieldCheck,
+  SlidersHorizontal,
+  Search,
+  Stethoscope,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/hooks/usePermissions";
 import Dialog from "./Dialog";
@@ -27,11 +37,43 @@ const TOGGLES = [
   { key: "clipboard", label: "Clipboard", hint: "Copy transcript to clipboard" },
 ] as const;
 
+// Sections with search keywords. Anchors + search both drive off this — MeasuringU
+// [G]: search is a precision tool for known intent; anchors cover browsing.
+const SECTIONS = [
+  {
+    id: "speech",
+    title: "Speech Recognition",
+    keywords: "profile model language parakeet whisper custom vocabulary hotwords accuracy",
+  },
+  {
+    id: "output",
+    title: "Output",
+    keywords: "llm mode cleanup bullet list email commit message typing clipboard type",
+  },
+  { id: "provider", title: "LLM Provider", keywords: "provider model local openrouter cloud" },
+  { id: "api-keys", title: "API Keys", keywords: "openrouter api key secret token" },
+  { id: "ptt", title: "Push-to-Talk", keywords: "hotkey shortcut keyboard binding key" },
+  {
+    id: "permissions",
+    title: "Permissions",
+    keywords: "clipboard microphone mic access permission",
+  },
+  {
+    id: "diagnostics",
+    title: "Diagnostics",
+    keywords:
+      "diagnostics environment debug report copy audio server os wayland pipewire microphone format",
+  },
+] as const;
+
 export default function SettingsPanel({ settings, onSave, visible, onClose }: Props) {
   const [local, setLocal] = useState<RuntimeSettings>({ ...settings });
   const [showKeys, setShowKeys] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [hotkey, setHotkey] = useState(() => getStoredHotkey());
+  const [searchQuery, setSearchQuery] = useState("");
+  const [copiedDiag, setCopiedDiag] = useState(false);
+  const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const { permissions, requestClipboard, requestMic, isCapturingMic, stopMic } = usePermissions();
 
   useEffect(() => {
@@ -42,6 +84,7 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
     if (visible) {
       setHotkey(getStoredHotkey());
       setConfirmDiscard(false);
+      setSearchQuery("");
     }
   }, [visible]);
 
@@ -61,6 +104,20 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
   };
 
   const update = (patch: Partial<RuntimeSettings>) => setLocal((s) => ({ ...s, ...patch }));
+
+  // A section matches an empty query (browse mode); otherwise match title or keywords.
+  const q = searchQuery.trim().toLowerCase();
+  const sectionMatches = (s: (typeof SECTIONS)[number]) =>
+    !q || s.title.toLowerCase().includes(q) || s.keywords.includes(q);
+  const visibleSections = SECTIONS.filter(
+    (s) => sectionMatches(s) && !(s.id === "api-keys" && local.llmProvider === "local"),
+  );
+
+  // Anchors: scroll the matched section into view inside the scrollable body.
+  const scrollToSection = (id: string) => {
+    const el = sectionRefs.current[id];
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const inputClass = cn(
     "w-full rounded-input bg-app-surface-secondary border border-border px-3 py-2 text-body text-text-primary",
@@ -94,8 +151,50 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
           <X size={14} /> {confirmDiscard ? "Discard?" : "Close"}
         </button>
       </div>
+      {/* Search + section anchors */}
+      <div className="flex items-center gap-2 border-b border-border px-6 py-3">
+        <Search size={15} className="shrink-0 text-text-muted" />
+        <input
+          type="text"
+          name="settings-search"
+          autoComplete="off"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search settings…"
+          aria-label="Search settings"
+          className="h-9 flex-1 rounded-input border border-border bg-app-surface-secondary px-3 text-body text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery("")}
+            className="text-small text-text-muted hover:text-text-primary"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5 px-6 py-3">
+        {visibleSections.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => scrollToSection(s.id)}
+            className="h-7 rounded-full border border-border bg-app-surface-secondary px-3 text-[12px] font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+          >
+            {s.title}
+          </button>
+        ))}
+        {visibleSections.length === 0 && (
+          <p className="text-small text-text-muted">No settings match “{searchQuery}”.</p>
+        )}
+      </div>
       <div className="flex max-h-[60vh] flex-col gap-6 overflow-y-auto overscroll-contain px-6 py-4">
-        <div className="flex flex-col gap-3">
+        <div
+          ref={(el) => {
+            sectionRefs.current.speech = el;
+          }}
+          style={{ display: sectionMatches(SECTIONS[0]) ? undefined : "none" }}
+          className="flex flex-col gap-3"
+        >
           <h3 className="flex items-center gap-2 text-subheading text-text-primary">
             <Mic size={15} className="text-text-secondary" />
             Speech Recognition
@@ -161,7 +260,13 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
           </div>
         </div>
 
-        <div className="flex flex-col gap-3">
+        <div
+          ref={(el) => {
+            sectionRefs.current.output = el;
+          }}
+          style={{ display: sectionMatches(SECTIONS[1]) ? undefined : "none" }}
+          className="flex flex-col gap-3"
+        >
           <h3 className="flex items-center gap-2 text-subheading text-text-primary">
             <SlidersHorizontal size={15} className="text-text-secondary" />
             Output
@@ -200,7 +305,13 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
           ))}
         </div>
 
-        <div className="flex flex-col gap-3">
+        <div
+          ref={(el) => {
+            sectionRefs.current.provider = el;
+          }}
+          style={{ display: sectionMatches(SECTIONS[2]) ? undefined : "none" }}
+          className="flex flex-col gap-3"
+        >
           <h3 className="flex items-center gap-2 text-subheading text-text-primary">
             <Bot size={15} className="text-text-secondary" />
             LLM Provider
@@ -256,7 +367,13 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
         </div>
 
         {local.llmProvider !== "local" && (
-          <div className="flex flex-col gap-3">
+          <div
+            ref={(el) => {
+              sectionRefs.current["api-keys"] = el;
+            }}
+            style={{ display: sectionMatches(SECTIONS[3]) ? undefined : "none" }}
+            className="flex flex-col gap-3"
+          >
             <h3 className="flex items-center gap-2 text-subheading text-text-primary">
               <KeyRound size={15} className="text-text-secondary" />
               API Keys
@@ -297,7 +414,13 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
           </div>
         )}
 
-        <div className="flex flex-col gap-3">
+        <div
+          ref={(el) => {
+            sectionRefs.current.ptt = el;
+          }}
+          style={{ display: sectionMatches(SECTIONS[4]) ? undefined : "none" }}
+          className="flex flex-col gap-3"
+        >
           <h3 className="flex items-center gap-2 text-subheading text-text-primary">
             <Mic size={15} className="text-text-secondary" />
             Push-to-Talk
@@ -322,7 +445,13 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
           </div>
         </div>
 
-        <div className="flex flex-col gap-3">
+        <div
+          ref={(el) => {
+            sectionRefs.current.permissions = el;
+          }}
+          style={{ display: sectionMatches(SECTIONS[5]) ? undefined : "none" }}
+          className="flex flex-col gap-3"
+        >
           <h3 className="flex items-center gap-2 text-subheading text-text-primary">
             <ShieldCheck size={15} className="text-text-secondary" />
             Permissions
@@ -367,6 +496,39 @@ export default function SettingsPanel({ settings, onSave, visible, onClose }: Pr
                 </button>
               )}
             </span>
+          </div>
+        </div>
+        <div
+          ref={(el) => {
+            sectionRefs.current.diagnostics = el;
+          }}
+          style={{ display: sectionMatches(SECTIONS[6]) ? undefined : "none" }}
+          className="flex flex-col gap-3"
+        >
+          <h3 className="flex items-center gap-2 text-subheading text-text-primary">
+            <Stethoscope size={15} className="text-text-secondary" />
+            Diagnostics
+          </h3>
+          <p className="text-small text-text-muted">
+            A local record of what Floure ran against — OS, display and audio server, and the
+            microphone format it negotiated. It is never sent anywhere; copying it is your choice.
+          </p>
+          <div>
+            <button
+              onClick={async () => {
+                try {
+                  const { invoke } = await import("@tauri-apps/api/core");
+                  const text = await invoke<string>("get_diagnostics");
+                  const { copyToClipboard } = await import("@/lib/clipboard");
+                  setCopiedDiag(await copyToClipboard(text));
+                } catch {
+                  setCopiedDiag(false);
+                }
+              }}
+              className="inline-flex h-9 items-center gap-1.5 rounded-button border border-border bg-app-surface px-3 text-small font-medium text-text-primary transition-colors hover:bg-app-hover"
+            >
+              {copiedDiag ? "Copied!" : "Copy diagnostics"}
+            </button>
           </div>
         </div>
       </div>

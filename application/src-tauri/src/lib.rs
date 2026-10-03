@@ -4,6 +4,7 @@ mod bench;
 mod compute;
 mod config;
 mod control;
+mod diagnostics;
 mod llm;
 mod models;
 mod output;
@@ -13,6 +14,7 @@ mod pipeline;
 mod ptt_hook;
 #[cfg(test)]
 mod tests;
+mod tray;
 mod vad;
 mod whisper;
 mod widget;
@@ -1225,7 +1227,9 @@ pub fn run() {
             engine_status,
             widget::show_widget,
             widget::hide_widget,
-            widget::toggle_widget
+            widget::toggle_widget,
+            tray::set_tray_state,
+            diagnostics::get_diagnostics
         ])
         .setup(|app| {
             // Cap OpenMP before any inference thread spawns: the uncapped
@@ -1241,6 +1245,10 @@ pub fn run() {
             // --- Local control channel (Waybar, compositor hotkeys) ---
             // Loopback-only; bind failures are non-fatal (logged in control.rs).
             control::start_control_server(app.handle().clone());
+
+            // --- Environment record for diagnosing machine-specific bugs ---
+            // Local file only, never transmitted; `DO_NOT_TRACK` opts out.
+            diagnostics::write();
 
             // --- Bare Ctrl+Win hold-to-talk (Windows only) ---
             // The global shortcut needs a main key; this hook covers the
@@ -1265,9 +1273,12 @@ pub fn run() {
             let toggle_widget_item =
                 MenuItem::with_id(app, "toggle_widget", "Toggle Widget", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            // Status line (research §7 rec 2): not an action, just state.
+            let status_item = MenuItem::with_id(app, "status", "Idle", false, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
                 &[
+                    &status_item,
                     &show_item,
                     &start_item,
                     &stop_item,
@@ -1276,7 +1287,7 @@ pub fn run() {
                 ],
             )?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("STT — Speech to Text")
                 .menu(&menu)
@@ -1306,6 +1317,19 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // Tray handles + pre-badged idle/recording icons for set_tray_state.
+            let base_icon = app
+                .default_window_icon()
+                .expect("default window icon")
+                .clone();
+            let _ = app.manage(tray::TrayState::build(
+                tray,
+                start_item.clone(),
+                stop_item.clone(),
+                status_item.clone(),
+                &base_icon,
+            ));
 
             // --- Minimize to tray instead of closing ---
             if let Some(window) = app.get_webview_window("main") {

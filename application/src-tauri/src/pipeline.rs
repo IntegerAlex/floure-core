@@ -704,10 +704,19 @@ impl PipelineController {
         ) {
             Ok(a) => {
                 eprintln!(
-                    "[pipeline] capturing from {:?} @ {}Hz",
+                    "[pipeline] capturing from {:?} @ {}Hz {}ch {:?}",
                     mic_hint.as_deref().unwrap_or("<default>"),
-                    a.sample_rate
+                    a.sample_rate,
+                    a.channels,
+                    a.format
                 );
+                // Record what this machine actually negotiated, so an
+                // environment bug is diagnosable from the diagnostics file.
+                crate::diagnostics::record_audio(crate::diagnostics::AudioEnv {
+                    sample_rate: a.sample_rate,
+                    channels: a.channels,
+                    format: a.format.clone(),
+                });
                 a
             }
             Err(e) => {
