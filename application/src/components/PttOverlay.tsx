@@ -31,7 +31,7 @@ export default function PttOverlay({ visible }: PttOverlayProps) {
         transition: "opacity 200ms ease-out, transform 200ms ease-out",
       }}
     >
-      <div className="flex items-center gap-2.5 rounded-full border border-white/10 bg-[#2C2520]/90 px-4 py-2.5 shadow-lg backdrop-blur-sm">
+      <div className="flex items-center gap-2.5 rounded-full border border-white/10 bg-ink/90 px-4 py-2.5 shadow-lg backdrop-blur-sm">
         {/* Pulsing mic icon */}
         <div className="relative flex h-[28px] w-[28px] items-center justify-center">
           <div

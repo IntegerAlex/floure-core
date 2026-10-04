@@ -88,7 +88,7 @@ function DeleteConfirm({
         <Button
           variant="primary"
           size="sm"
-          className="!bg-[#E55353]/90 hover:!bg-[#E55353]"
+          className="!bg-danger/90 hover:!bg-danger"
           onClick={onConfirm}
         >
           Delete

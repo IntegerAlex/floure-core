@@ -267,7 +267,7 @@ describe("MicButton", () => {
   it("applies error styles when in error state", () => {
     renderWithProviders(<MicButton status="error" connected={false} onToggle={() => {}} />);
     const btn = screen.getByRole("button");
-    expect(btn.className).toContain("border-[#EF4444]");
+    expect(btn.className).toContain("border-danger");
   });
 });
 

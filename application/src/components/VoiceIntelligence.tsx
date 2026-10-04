@@ -43,14 +43,14 @@ function buildInsights(data: IntelligenceData): InsightItem[] {
         data.mostActiveDayWords > 0
           ? `Average ${data.mostActiveDayWords.toLocaleString()} words`
           : undefined,
-      color: "text-[#3B6B9E]",
+      color: "text-alpine",
     },
     {
       icon: Clock,
       label: "Most Productive Hour",
       value: data.mostProductiveHour,
       detail: data.peakVoiceUsage,
-      color: "text-[#A88CC8]",
+      color: "text-lavender",
     },
     {
       icon: Timer,
@@ -64,7 +64,7 @@ function buildInsights(data: IntelligenceData): InsightItem[] {
       label: "Most Used Language",
       value: data.mostUsedLanguage,
       detail: data.languagePercentage > 0 ? `${data.languagePercentage}% of sessions` : undefined,
-      color: "text-[#6B9E7A]",
+      color: "text-mint",
     },
   ];
 }

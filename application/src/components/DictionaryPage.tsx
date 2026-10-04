@@ -109,7 +109,7 @@ function EntryCard({
           <Star
             className={cn(
               "h-4 w-4 transition-colors",
-              entry.is_favorite ? "fill-[#D4883A] text-sunset" : "text-text-muted",
+              entry.is_favorite ? "fill-sunset text-sunset" : "text-text-muted",
             )}
           />
         </button>
@@ -300,7 +300,7 @@ function DeleteConfirm({
         <Button
           variant="primary"
           size="sm"
-          className="!bg-[#E55353]/90 hover:!bg-[#E55353]"
+          className="!bg-danger/90 hover:!bg-danger"
           onClick={onConfirm}
         >
           Delete
@@ -518,7 +518,7 @@ export default function DictionaryPage() {
         </div>
 
         {error && (
-          <div className="mb-4 rounded-[10px] border border-[rgba(229,83,83,0.2)] bg-[rgba(229,83,83,0.1)] px-4 py-2 text-[13px] text-[#E55353]">
+          <div className="mb-4 rounded-[10px] border border-danger-border bg-danger-surface px-4 py-2 text-[13px] text-danger">
             {error}
             <button onClick={() => setError("")} className="ml-2 underline">
               Dismiss

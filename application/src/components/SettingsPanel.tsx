@@ -302,7 +302,7 @@ export default function SettingsPanel({ settings, onSave }: Props) {
                 checked={local[t.key]}
                 onChange={(e) => update({ [t.key]: e.target.checked })}
                 aria-label={t.label}
-                className="h-5 w-5 accent-[#FF3B56]"
+                className="h-5 w-5 accent"
               />
             </label>
           ))}
@@ -499,7 +499,7 @@ export default function SettingsPanel({ settings, onSave }: Props) {
                 if (e.target.checked) void requestClipboard();
               }}
               aria-label="Clipboard permission"
-              className="h-5 w-5 accent-[#FF3B56]"
+              className="h-5 w-5 accent"
             />
           </label>
           <div className={checkRow}>
@@ -516,7 +516,7 @@ export default function SettingsPanel({ settings, onSave }: Props) {
                   else if (isCapturingMic) stopMic();
                 }}
                 aria-label="Microphone permission"
-                className="h-5 w-5 accent-[#FF3B56]"
+                className="h-5 w-5 accent"
               />
               {permissions.microphone === "granted" && (
                 <button

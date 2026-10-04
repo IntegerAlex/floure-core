@@ -37,8 +37,7 @@ export const AppShell = forwardRef<HTMLDivElement, AppShellProps>(
     return (
       <div
         ref={ref}
-        className={cn("relative flex h-screen overflow-hidden", className)}
-        style={{ backgroundColor: "#FAF8F5", color: "#2C2520" }}
+        className={cn("relative flex h-screen overflow-hidden bg-app-bg text-text-primary", className)}
         {...props}
       >
         {/* Skip link: invisible until focused, jumps past sidebar + titlebar */}

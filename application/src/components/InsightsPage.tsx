@@ -127,7 +127,7 @@ export default function InsightsPage() {
                 </h2>
                 <p className="text-[13px] text-text-muted">
                   This week you dictated{" "}
-                  <span className="font-semibold tabular-nums text-[#3B6B9E]">
+                  <span className="font-semibold tabular-nums text-alpine">
                     {formatWords(weeklyWordsTotal)} words
                   </span>
                   {wordsTrend > 0 && (

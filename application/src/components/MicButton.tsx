@@ -25,8 +25,8 @@ export default function MicButton({ status, connected, onToggle }: MicButtonProp
           "h-[80px] w-[80px]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-app-bg",
           isError && [
-            "border-2 border-[#EF4444] bg-app-surface-secondary",
-            "shadow-[0_0_40px_rgba(239,68,68,0.25)]",
+            "border-2 border-danger bg-app-surface-secondary",
+            "shadow-danger-glow",
           ],
           isPulsing && [
             "border-2 border-accent bg-accent",

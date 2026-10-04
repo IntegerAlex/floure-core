@@ -11,9 +11,11 @@
 :root {
   --snow: #faf8f5;
   --ink: #2c2520;
+  --ink-rgb: 44, 37, 32;
   --alpine: #3b6b9e;
   --sunset: #d4883a;
   --lavender: #a88cc8;
+  --lavender-rgb: 168, 140, 200;
   --mist: #ede9e3;
   --accent: #ff3b56;
   --accent-hover: #e6324d;
@@ -54,7 +56,7 @@ body {
 }
 
 ::selection {
-  background: rgba(168, 140, 200, 0.4);
+  background: rgba(var(--lavender-rgb), 0.4);
   color: var(--ink);
 }
 
@@ -92,16 +94,16 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(44, 37, 32, 0.1);
+  background: rgba(var(--ink-rgb), 0.1);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(44, 37, 32, 0.18);
+  background: rgba(var(--ink-rgb), 0.18);
 }
 
 /* Native dialog backdrop (used by Dialog.tsx) */
 dialog::backdrop {
-  background: rgba(44, 37, 32, 0.4);
+  background: rgba(var(--ink-rgb), 0.4);
 }
 
 /* Nav indicator */
@@ -250,55 +252,7 @@ dialog::backdrop {
   }
 }
 
-/* Force colors via CSS variables — bulletproof fallback */
-.bg-app-bg {
-  background-color: var(--snow) !important;
-}
-.bg-app-surface {
-  background-color: var(--glass-bg) !important;
-}
-.bg-app-surface-solid {
-  background-color: #ffffff !important;
-}
-.bg-app-surface-card {
-  background-color: var(--glass-bg) !important;
-}
-.bg-app-surface-secondary {
-  background-color: #f3f0eb !important;
-}
-.bg-app-sidebar {
-  background-color: rgba(255, 255, 255, 0.4) !important;
-}
-.bg-app-hover {
-  background-color: rgba(44, 37, 32, 0.04) !important;
-}
-.bg-app-surface-dark {
-  background-color: #ede8e1 !important;
-}
-.text-text-primary {
-  color: var(--ink) !important;
-}
-.text-text-secondary {
-  color: #6b6560 !important;
-}
-.text-text-muted {
-  color: #76716b !important;
-}
-.text-text-disabled {
-  color: #c4bfb8 !important;
-}
-.border-border {
-  border-color: rgba(44, 37, 32, 0.08) !important;
-}
-.border-border-hover {
-  border-color: rgba(44, 37, 32, 0.14) !important;
-}
-.bg-accent-surface {
-  background-color: #ffe3e5 !important;
-}
-.bg-accent-hover-surface {
-  background-color: #fff0f2 !important;
-}
-.bg-accent-focus-surface {
-  background-color: #fff7f8 !important;
-}
+/* NOTE (Phase 0): the old "force colors via CSS variables" block of 18
+   `!important` rules sat here. Every value was verified identical to
+   tailwind.config.js, so Tailwind is now the single source of truth for
+   class-driven colors. */

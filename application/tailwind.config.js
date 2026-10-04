@@ -51,6 +51,12 @@ export default {
           border: "rgba(255,59,86,0.22)",
         },
         success: "#3A8A5C",
+        danger: {
+          DEFAULT: "#E55353",
+          surface: "rgba(229,83,83,0.10)",
+          border: "rgba(229,83,83,0.20)",
+        },
+        mint: "#6B9E7A",
         time: "#9C9690",
       },
       fontFamily: {
@@ -88,6 +94,7 @@ export default {
         ambient: "0 0 80px rgba(0,0,0,0.04)",
         "accent-glow": "none",
         "accent-button": "0 1px 2px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.08)",
+        "danger-glow": "0 0 40px rgba(229,83,83,0.25)",
         card: "0 1px 3px rgba(44,37,32,0.04), 0 0 0 1px rgba(44,37,32,0.04)",
         "card-hover": "0 8px 24px rgba(44,37,32,0.08), 0 0 0 1px rgba(44,37,32,0.06)",
       },
