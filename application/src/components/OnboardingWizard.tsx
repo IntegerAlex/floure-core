@@ -1,23 +1,22 @@
 import { useEffect, useState } from "react";
 import {
-  CircleCheck,
   TriangleAlert,
-  LoaderCircle,
-  CircleX,
   Zap,
   Star,
   Check,
   X,
   ClipboardList,
   Keyboard,
+  Mic,
+  Copy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { MODEL_CATALOG } from "../store";
-import type { SystemCheck } from "../store";
 import { usePermissions } from "../hooks/usePermissions";
-import { micLevelEmitter } from "../utils/mic-emitter";
 import { getStoredHotkey } from "../lib/settings";
+import { copyToClipboard } from "../lib/clipboard";
+import { isTauri } from "../lib/utils";
 
 function StepIndicator({ step, total }: { step: number; total: number }) {
   return (
@@ -36,76 +35,105 @@ function StepIndicator({ step, total }: { step: number; total: number }) {
   );
 }
 
-function Step1SystemCheck({ checks, onNext }: { checks: SystemCheck[]; onNext: () => void }) {
-  const hasFailures = checks.some((c) => c.status === "fail");
-  const allChecked = checks.every((c) => c.status !== "pending") && checks.length > 0;
+const LOOPBACK_CMD = "curl -X POST localhost:17833/toggle";
+
+function StepPermissions({
+  clipboard,
+  typing,
+  onClipboard,
+  onTyping,
+  onNext,
+}: {
+  clipboard: boolean;
+  typing: boolean;
+  onClipboard: (v: boolean) => void;
+  onTyping: (v: boolean) => void;
+  onNext: () => void;
+}) {
+  const { permissions, requestMic } = usePermissions();
+  const micGranted = permissions.microphone === "granted";
   return (
     <div className="flex flex-col items-center gap-6 text-center">
-      <h2 className="text-balance text-heading text-text-primary">System Check</h2>
-      <p className="text-body text-text-secondary">Making sure everything is ready…</p>
-      <div className="flex w-full flex-col gap-2">
-        {checks.map((check, i) => (
-          <div
-            key={i}
-            className={cn(
-              "flex items-start gap-3 rounded-card border px-4 py-3",
-              check.status === "pass" && "border-border bg-app-surface",
-              check.status === "warning" && "border-yellow-500/25 bg-app-surface",
-              check.status === "pending" && "border-border bg-app-surface",
-              check.status === "fail" && "border-red-500/20 bg-app-surface",
-            )}
-          >
-            <span className="mt-0.5 shrink-0" aria-hidden="true">
-              {check.status === "pass" ? (
-                <CircleCheck size={18} className="text-green-600" />
-              ) : check.status === "warning" ? (
-                <TriangleAlert size={18} className="text-yellow-700" />
-              ) : check.status === "pending" ? (
-                <LoaderCircle size={18} className="animate-spin text-text-muted" />
-              ) : (
-                <CircleX size={18} className="text-red-600" />
-              )}
-            </span>
-            <div className="flex flex-col gap-0.5 text-left">
-              <strong className="text-body text-text-primary">{check.name}</strong>
-              <span className="text-small text-text-secondary">{check.message}</span>
-              {check.fixHint && <span className="text-small text-text-muted">{check.fixHint}</span>}
-            </div>
+      <h2 className="text-balance text-heading text-text-primary">Permissions</h2>
+      <p className="text-body text-text-secondary">
+        Control where your transcribed text goes. System checks and the mic level test live in
+        Settings → System & Microphone.
+      </p>
+
+      <div className="flex w-full flex-col gap-3">
+        <label className="flex cursor-pointer items-center justify-between rounded-card border border-border bg-app-surface px-4 py-3">
+          <div className="text-left">
+            <strong className="flex items-center gap-2 text-body text-text-primary">
+              <ClipboardList size={16} className="text-text-secondary" />
+              Auto-copy to Clipboard
+            </strong>
           </div>
-        ))}
+          <span className="relative inline-flex h-5 w-9 items-center rounded-full border border-border bg-app-surface-secondary transition-colors">
+            <input
+              type="checkbox"
+              checked={clipboard}
+              onChange={(e) => onClipboard(e.target.checked)}
+              className="peer sr-only"
+            />
+            <span className="ml-0.5 inline-block h-3.5 w-3.5 rounded-full bg-text-muted transition-transform peer-checked:translate-x-4 peer-checked:bg-accent" />
+          </span>
+        </label>
+
+        <label className="flex cursor-pointer items-center justify-between rounded-card border border-border bg-app-surface px-4 py-3">
+          <div className="text-left">
+            <strong className="flex items-center gap-2 text-body text-text-primary">
+              <Keyboard size={16} className="text-text-secondary" />
+              Type into Focused Window
+            </strong>
+          </div>
+          <span className="relative inline-flex h-5 w-9 items-center rounded-full border border-border bg-app-surface-secondary transition-colors">
+            <input
+              type="checkbox"
+              checked={typing}
+              onChange={(e) => onTyping(e.target.checked)}
+              className="peer sr-only"
+            />
+            <span className="ml-0.5 inline-block h-3.5 w-3.5 rounded-full bg-text-muted transition-transform peer-checked:translate-x-4 peer-checked:bg-accent" />
+          </span>
+        </label>
+
+        <div className="flex items-center justify-between rounded-card border border-border bg-app-surface px-4 py-3">
+          <strong className="flex items-center gap-2 text-body text-text-primary">
+            <Mic size={16} className="text-text-secondary" />
+            Microphone {micGranted ? "ready" : "access"}
+          </strong>
+          {micGranted ? (
+            <span className="inline-flex items-center gap-1 text-small text-green-600">
+              <Check size={14} aria-hidden="true" /> Granted
+            </span>
+          ) : (
+            <button
+              onClick={() => void requestMic()}
+              className="inline-flex h-8 items-center rounded-button bg-accent px-3 text-small font-medium text-white transition-colors hover:bg-accent-warm"
+            >
+              Enable mic
+            </button>
+          )}
+        </div>
       </div>
-      <div className="flex items-center justify-center gap-3">
-        {!allChecked ? (
-          <button
-            className={cn(
-              "inline-flex h-11 items-center justify-center rounded-button px-4 py-2 text-body font-medium transition-colors duration-200",
-              "bg-accent text-white shadow-accent-button hover:bg-accent-warm",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
-            )}
-            onClick={onNext}
-          >
-            Run Checks
-          </button>
-        ) : (
-          <button
-            className={cn(
-              "inline-flex h-11 items-center justify-center rounded-button px-4 py-2 text-body font-medium transition-colors duration-200",
-              "bg-accent text-white shadow-accent-button hover:bg-accent-warm",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
-              "disabled:pointer-events-none disabled:opacity-50",
-            )}
-            onClick={onNext}
-            disabled={hasFailures}
-          >
-            {hasFailures ? "Fix Issues Above" : "Continue"}
-          </button>
-        )}
+
+      <div className="flex items-center justify-center">
+        <button
+          className={cn(
+            "inline-flex h-11 items-center justify-center rounded-button px-4 py-2 text-body font-medium transition-colors duration-200",
+            "bg-accent text-white shadow-accent-button hover:bg-accent-warm",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
+          )}
+          onClick={onNext}
+        >
+          Continue
+        </button>
       </div>
     </div>
   );
 }
 
-function Step2ModelDownload({
+function StepModelDownload({
   progress,
   onDownload,
   onDone,
@@ -117,9 +145,24 @@ function Step2ModelDownload({
   const [selected, setSelected] = useState<Set<string>>(
     new Set(MODEL_CATALOG.filter((m) => m.recommended).map((m) => m.name)),
   );
+  const [hasExisting, setHasExisting] = useState(false);
   const hasDownloads = Object.values(progress).some(
     (p) => p.status === "done" || p.status === "downloading",
   );
+
+  // Returning installs already have models on disk — say so and let them skip.
+  useEffect(() => {
+    if (!isTauri()) return;
+    (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const statuses = await invoke<Array<{ downloaded: boolean }>>("check_model_status");
+        if (statuses.some((s) => s.downloaded)) setHasExisting(true);
+      } catch {
+        /* offline — selection UI still works */
+      }
+    })();
+  }, []);
 
   const toggle = (name: string) => {
     setSelected((prev) => {
@@ -133,16 +176,17 @@ function Step2ModelDownload({
     });
   };
 
-  const totalSize = MODEL_CATALOG.filter((m) => selected.has(m.name))
-    .reduce((s, m) => s + m.size, "0\u00A0MB")
-    .toString();
-
   return (
     <div className="flex flex-col items-center gap-6 text-center">
       <h2 className="text-balance text-heading text-text-primary">Download Models</h2>
       <p className="text-body text-text-secondary">
         Choose which speech recognition models to install. Smaller = faster, larger = more accurate.
       </p>
+      {hasExisting && !hasDownloads && (
+        <p className="w-full rounded-card border border-green-500/20 bg-green-500/10 px-4 py-2.5 text-small text-green-700">
+          Models already on disk — you can continue without downloading.
+        </p>
+      )}
 
       <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
         {MODEL_CATALOG.map((model) => (
@@ -221,7 +265,7 @@ function Step2ModelDownload({
           onClick={() => onDownload(Array.from(selected))}
           disabled={selected.size === 0}
         >
-          Download Selected (≈{totalSize})
+          Download Selected
         </button>
         <button
           className={cn(
@@ -231,182 +275,62 @@ function Step2ModelDownload({
           )}
           onClick={onDone}
         >
-          {hasDownloads ? "Continue" : "Skip"}
+          {hasDownloads || hasExisting ? "Continue" : "Skip"}
         </button>
       </div>
     </div>
   );
 }
 
-function Step3MicSetup({
-  micLevel,
-  testing,
-  onTest,
-  onDone,
-}: {
-  micLevel: number;
-  testing: boolean;
-  onTest: () => void;
-  onDone: () => void;
-}) {
-  return (
-    <div className="flex flex-col items-center gap-6 text-center">
-      <h2 className="text-balance text-heading text-text-primary">Microphone Setup</h2>
-      <p className="text-body text-text-secondary">Check your mic and adjust settings.</p>
-
-      <div className="flex w-full flex-col items-center gap-4">
-        <div className="h-3 w-full overflow-hidden rounded-input border border-border bg-app-surface-secondary">
-          <div
-            className="h-full rounded-input bg-accent transition-[width] duration-75"
-            style={{ width: `${Math.min(100, micLevel * 300)}%` }}
-          />
-        </div>
-
-        <button
-          className={cn(
-            "inline-flex h-11 items-center justify-center rounded-button px-4 py-2 text-body font-medium transition-colors duration-200",
-            "border border-border bg-app-surface text-text-primary hover:bg-app-hover",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
-          )}
-          onClick={onTest}
-        >
-          {testing ? "Stop Test" : "Test Microphone"}
-        </button>
-      </div>
-
-      <div className="flex items-center justify-center">
-        <button
-          className={cn(
-            "inline-flex h-11 items-center justify-center rounded-button px-4 py-2 text-body font-medium transition-colors duration-200",
-            "bg-accent text-white shadow-accent-button hover:bg-accent-warm",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
-          )}
-          onClick={onDone}
-        >
-          Mic Sounds Good
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Step4Permissions({
-  clipboard,
-  typing,
-  onClipboard,
-  onTyping,
-  onDone,
-}: {
-  clipboard: boolean;
-  typing: boolean;
-  onClipboard: (v: boolean) => void;
-  onTyping: (v: boolean) => void;
-  onDone: () => void;
-}) {
-  return (
-    <div className="flex flex-col items-center gap-6 text-center">
-      <h2 className="text-balance text-heading text-text-primary">Permissions</h2>
-      <p className="text-body text-text-secondary">Control where your transcribed text goes.</p>
-
-      <div className="flex w-full flex-col gap-3">
-        <label className="flex cursor-pointer items-center justify-between rounded-card border border-border bg-app-surface px-4 py-3">
-          <div className="text-left">
-            <strong className="flex items-center gap-2 text-body text-text-primary">
-              <ClipboardList size={16} className="text-text-secondary" />
-              Auto-copy to Clipboard
-            </strong>
-          </div>
-          <span className="relative inline-flex h-5 w-9 items-center rounded-full border border-border bg-app-surface-secondary transition-colors">
-            <input
-              type="checkbox"
-              checked={clipboard}
-              onChange={(e) => onClipboard(e.target.checked)}
-              className="peer sr-only"
-            />
-            <span className="ml-0.5 inline-block h-3.5 w-3.5 rounded-full bg-text-muted transition-transform peer-checked:translate-x-4 peer-checked:bg-accent" />
-          </span>
-        </label>
-
-        <label className="flex cursor-pointer items-center justify-between rounded-card border border-border bg-app-surface px-4 py-3">
-          <div className="text-left">
-            <strong className="flex items-center gap-2 text-body text-text-primary">
-              <Keyboard size={16} className="text-text-secondary" />
-              Type into Focused Window
-            </strong>
-          </div>
-          <span className="relative inline-flex h-5 w-9 items-center rounded-full border border-border bg-app-surface-secondary transition-colors">
-            <input
-              type="checkbox"
-              checked={typing}
-              onChange={(e) => onTyping(e.target.checked)}
-              className="peer sr-only"
-            />
-            <span className="ml-0.5 inline-block h-3.5 w-3.5 rounded-full bg-text-muted transition-transform peer-checked:translate-x-4 peer-checked:bg-accent" />
-          </span>
-        </label>
-      </div>
-
-      <div className="flex items-center justify-center">
-        <button
-          className={cn(
-            "inline-flex h-11 items-center justify-center rounded-button px-4 py-2 text-body font-medium transition-colors duration-200",
-            "bg-accent text-white shadow-accent-button hover:bg-accent-warm",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
-          )}
-          onClick={onDone}
-        >
-          Continue
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Step5Ready({ hotkey, onFinish }: { hotkey: string; onFinish: () => void }) {
-  // Wayland has no core key-grab, so a global hotkey is best-effort there. The
-  // loopback control server (127.0.0.1:17833) is the reliable Linux trigger —
-  // the user binds a compositor key to `curl -X POST localhost:17833/toggle`.
+function StepReady({ hotkey, onFinish }: { hotkey: string; onFinish: () => void }) {
+  const [copied, setCopied] = useState(false);
   const isLinux =
     typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("linux");
+
+  const copyCmd = async () => {
+    setCopied(await copyToClipboard(LOOPBACK_CMD));
+    window.setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div className="flex flex-col items-center gap-6 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent/10 text-accent">
-        <svg
-          width="32"
-          height="32"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-          <line x1="12" y1="19" x2="12" y2="23" />
-          <line x1="8" y1="23" x2="16" y2="23" />
-        </svg>
+        <Mic size={30} strokeWidth={1.5} aria-hidden="true" />
       </div>
-      <h2 className="text-balance text-heading text-text-primary">You're All Set!</h2>
+      <h2 className="text-balance text-heading text-text-primary">You&apos;re All Set!</h2>
       <p className="text-body text-text-secondary">
         Your audio never leaves this device — everything runs locally.
       </p>
       {isLinux ? (
-        <div className="flex w-full flex-col gap-2 rounded-card border border-border bg-app-surface p-4 text-left text-body text-text-secondary">
+        <div className="flex w-full flex-col gap-2 rounded-card border border-border bg-app-surface p-4 text-left">
           <p className="text-small text-text-muted">
-            On Linux/Wayland, global hotkeys are compositor-dependent. The reliable trigger is the
-            built-in control server — bind a compositor key to:
+            On Wayland, global hotkeys are compositor-dependent. The reliable trigger is the
+            built-in control server — copy the command, then bind it in your desktop:
           </p>
-          <code className="block w-full overflow-x-auto rounded-[8px] bg-app-surface-secondary px-3 py-2 text-left text-[12px] text-text-primary">
-            curl -X POST localhost:17833/toggle
-          </code>
-          <p className="text-small text-text-muted">Add to your Sway/Hyprland/KDE config, e.g.:</p>
-          <code className="block w-full overflow-x-auto rounded-[8px] bg-app-surface-secondary px-3 py-2 text-left text-[12px] text-text-primary">
-            bindsym $mod+d exec "curl -X POST localhost:17833/toggle"
-          </code>
+          <div className="flex items-center gap-2">
+            <code className="block w-full overflow-x-auto whitespace-nowrap rounded-[8px] bg-app-surface-secondary px-3 py-2 text-left text-[12px] text-text-primary">
+              {LOOPBACK_CMD}
+            </code>
+            <button
+              onClick={() => void copyCmd()}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-button border border-border bg-app-surface-secondary px-3 text-small font-medium text-text-primary transition-colors hover:bg-app-hover"
+            >
+              <Copy size={12} aria-hidden="true" />
+              {copied ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <ul className="flex list-disc flex-col gap-1 pl-5 text-small text-text-secondary">
+            <li>GNOME: Settings → Keyboard → Custom Shortcuts → command above</li>
+            <li>KDE: System Settings → Shortcuts → Custom → command above</li>
+            <li>
+              Sway/i3: <code>bindsym $mod+d exec &quot;{LOOPBACK_CMD}&quot;</code>
+            </li>
+            <li>
+              Hyprland: <code>bind = $mod, D, exec, {LOOPBACK_CMD}</code>
+            </li>
+          </ul>
           <p className="text-small text-text-muted">
-            You can also start/stop from the tray icon or the widget button.
+            Or start/stop from the tray icon or the widget mic button — no keybind needed.
           </p>
         </div>
       ) : (
@@ -446,17 +370,17 @@ interface Props {
 }
 
 export default function OnboardingWizard({ onFinished }: Props) {
-  const { state, dispatch, runSystemChecks, downloadModels, nextStep, finish } =
-    useOnboarding(onFinished);
-  const { step, systemChecks, modelDownloadProgress, clipboardEnabled, typingEnabled, error } =
-    state;
-  const totalSteps = 5;
+  const { state, dispatch, downloadModels, nextStep, finish } = useOnboarding(onFinished);
+  const { step, clipboardEnabled, typingEnabled, modelDownloadProgress, error } = state;
+  const totalSteps = 3;
 
-  // Live mic test: reuse the Settings capture path (usePermissions) and the
-  // shared level emitter. The wizard reducer never carried a real level.
-  const { isCapturingMic, requestMic, stopMic } = usePermissions();
-  const [micLevel, setMicLevel] = useState(0);
-  useEffect(() => micLevelEmitter.subscribe(setMicLevel), []);
+  // Returning installs (flag already set, e.g. re-run after an update) skip
+  // the model step — Handy re-checks permissions but never re-pushes models.
+  const isReturning =
+    typeof window !== "undefined" && localStorage.getItem("onboarding_completed") === "true";
+  useEffect(() => {
+    if (isReturning && step === 1) nextStep();
+  }, [isReturning, step, nextStep]);
 
   return (
     <div className="animate-wizard-in flex min-h-screen flex-col items-center justify-center p-8">
@@ -480,28 +404,16 @@ export default function OnboardingWizard({ onFinished }: Props) {
           {/* Keyed by step so the CSS entrance animation replays on change. */}
           <div key={step} className="animate-step-in">
             {step === 0 && (
-              <Step1SystemCheck
-                checks={
-                  systemChecks.length > 0
-                    ? systemChecks
-                    : [{ name: "Running checks…", status: "pending", message: "Scanning system" }]
-                }
-                onNext={() => runSystemChecks()}
+              <StepPermissions
+                clipboard={clipboardEnabled}
+                typing={typingEnabled}
+                onClipboard={(v) => dispatch({ type: "SET_CLIPBOARD", enabled: v })}
+                onTyping={(v) => dispatch({ type: "SET_TYPING", enabled: v })}
+                onNext={() => nextStep()}
               />
             )}
             {step === 1 && (
-              <Step3MicSetup
-                micLevel={micLevel}
-                testing={isCapturingMic}
-                onTest={isCapturingMic ? stopMic : () => void requestMic()}
-                onDone={() => {
-                  stopMic();
-                  nextStep();
-                }}
-              />
-            )}
-            {step === 2 && (
-              <Step2ModelDownload
+              <StepModelDownload
                 progress={modelDownloadProgress}
                 onDownload={(models) => {
                   downloadModels(models);
@@ -509,16 +421,7 @@ export default function OnboardingWizard({ onFinished }: Props) {
                 onDone={() => nextStep()}
               />
             )}
-            {step === 3 && (
-              <Step4Permissions
-                clipboard={clipboardEnabled}
-                typing={typingEnabled}
-                onClipboard={(v) => dispatch({ type: "SET_CLIPBOARD", enabled: v })}
-                onTyping={(v) => dispatch({ type: "SET_TYPING", enabled: v })}
-                onDone={() => nextStep()}
-              />
-            )}
-            {step === 4 && <Step5Ready hotkey={getStoredHotkey()} onFinish={finish} />}
+            {step >= 2 && <StepReady hotkey={getStoredHotkey()} onFinish={finish} />}
           </div>
         </div>
       </div>

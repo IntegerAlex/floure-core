@@ -187,7 +187,7 @@ export function onboardingReducer(
 
 export const DEFAULT_ONBOARDING: OnboardingState = {
   step: 0,
-  totalSteps: 5,
+  totalSteps: 3,
   completed: false,
   systemChecks: [],
   clipboardEnabled: true,

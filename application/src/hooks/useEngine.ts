@@ -19,7 +19,8 @@ interface Options {
     retryHint?: string,
   ) => void;
   dismissErrorsOfCategory: (category: ErrorCategory) => void;
-  setToast: (message: string) => void;
+  /** Stacked-toast surface (replaces the old single-string toast). */
+  notify: (kind: "success" | "error" | "info", message: string) => void;
 }
 
 /**
@@ -31,12 +32,7 @@ interface Options {
  * captured when they were attached. They are the reason this is not just a
  * bag of state.
  */
-export function useEngine({
-  settingsVersion,
-  addError,
-  dismissErrorsOfCategory,
-  setToast,
-}: Options) {
+export function useEngine({ settingsVersion, addError, dismissErrorsOfCategory, notify }: Options) {
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState("idle");
   const [lines, setLines] = useState<TranscriptLine[]>([]);
@@ -64,6 +60,41 @@ export function useEngine({
   const isStartingRef = useRef(false);
   const startRef = useRef<(overrideSettings?: RuntimeSettings, source?: string) => void>(() => {});
   const stopRef = useRef<() => void>(() => {});
+  const cancelRef = useRef<() => void>(() => {});
+  // LLM tokens stream at tens per second; each setLines re-renders the whole
+  // feed (100 capped rows reconciled). Buffer and flush at ~8fps instead —
+  // visually identical, ~5-10x fewer renders. asr_partial stays immediate:
+  // partials are low-frequency and ARE the live feedback.
+  const pendingTokensRef = useRef("");
+  const flushTimerRef = useRef<number | null>(null);
+
+  const flushTokens = () => {
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    const chunk = pendingTokensRef.current;
+    if (!chunk) return;
+    pendingTokensRef.current = "";
+    setLines((prev) => {
+      const last = prev[prev.length - 1];
+      if (last) {
+        const updatedProcessed = (last.processed || "") + chunk;
+        return [
+          ...prev.slice(0, -1),
+          { ...last, processed: updatedProcessed, status: "rewriting" },
+        ];
+      }
+      return prev;
+    });
+  };
+
+  const queueToken = (text: string) => {
+    pendingTokensRef.current += text;
+    if (flushTimerRef.current === null) {
+      flushTimerRef.current = window.setTimeout(flushTokens, 120);
+    }
+  };
 
   connectedRef.current = connected;
   statusRef.current = status;
@@ -105,7 +136,7 @@ export function useEngine({
         backend: event.backend,
         device: "cuda",
       });
-      setToast("Engine ready — models loaded");
+      notify("success", "Engine ready — models loaded");
       return;
     }
     if (event.type === "asr_partial") {
@@ -168,20 +199,11 @@ export function useEngine({
       return;
     }
     if (event.type === "llm_token") {
-      setLines((prev) => {
-        const last = prev[prev.length - 1];
-        if (last) {
-          const updatedProcessed = (last.processed || "") + event.text;
-          return [
-            ...prev.slice(0, -1),
-            { ...last, processed: updatedProcessed, status: "rewriting" },
-          ];
-        }
-        return prev;
-      });
+      queueToken(event.text);
       return;
     }
     if (event.type === "llm_end") {
+      flushTokens();
       setLines((prev) => {
         const last = prev[prev.length - 1];
         if (last) {
@@ -230,7 +252,7 @@ export function useEngine({
           const st = await invoke<string>("engine_status");
           if (engineGenerationRef.current !== generation) return;
           if (st === "warming") {
-            setToast("Warming up engines — first launch takes a moment…");
+            notify("info", "Warming up engines — first launch takes a moment…");
           }
         } catch {
           /* not in Tauri */
@@ -241,13 +263,14 @@ export function useEngine({
         // and this callback must not clear the newer handle.
         if (engineGenerationRef.current !== generation) return;
         const msg = err instanceof Error ? err.message : "Failed to start engine";
-        setToast(msg);
+        notify("error", msg);
         addError("connection", msg, true, "Check if stt-engine is installed");
         runtimeRef.current = null;
       });
 
     // Cleanup: kill backend on app unmount or respawn
     return () => {
+      flushTokens();
       api.kill();
       unlistenWidget?.();
       // Only clear if we still own the ref — a newer generation may have
@@ -266,7 +289,7 @@ export function useEngine({
     if (!runtimeRef.current) {
       console.log(`[PTT] Start rejected — engine not ready, source=${source}`);
       isStartingRef.current = false;
-      setToast("Engine not ready — wait a moment and try again");
+      notify("error", "Engine not ready — wait a moment and try again");
       return;
     }
     // Backend handles typing directly — no need for frontend focus restore
@@ -303,6 +326,7 @@ export function useEngine({
   const stop = async () => {
     if (!runtimeRef.current) return;
     isStartingRef.current = false;
+    flushTokens();
     // Backend handles typing directly — no need for frontend type_text
     console.log("[PTT] Stop requested");
     playPttStop();
@@ -328,6 +352,21 @@ export function useEngine({
   startRef.current = start;
   stopRef.current = stop;
 
+  /// Cancel: stop the backend and drop the in-progress line, keeping earlier
+  /// committed lines. Stop alone keeps the partial; cancel discards it.
+  const cancel = async () => {
+    if (!runtimeRef.current) return;
+    console.log("[PTT] Cancel requested — discarding in-progress line");
+    await stop();
+    setLines((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.status !== "done") return prev.slice(0, -1);
+      return prev;
+    });
+    notify("info", "Recording cancelled");
+  };
+  cancelRef.current = cancel;
+
   const clearLines = () => setLines([]);
 
   return {
@@ -338,10 +377,12 @@ export function useEngine({
     pttActive,
     start,
     stop,
+    cancel,
     clearLines,
     connectedRef,
     statusRef,
     startRef,
     stopRef,
+    cancelRef,
   };
 }

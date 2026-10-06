@@ -236,6 +236,23 @@ dialog::backdrop {
   animation: panel-in 200ms ease-out;
 }
 
+/* Theme hook: light is the default (tokens are light-authored). Dark only
+   flips the page chrome + native controls until the Tailwind token set is
+   migrated to CSS vars — the selector ships now, full token theming later. */
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+[data-theme="dark"] body {
+  background-color: #1c1917;
+  color: #e7e5e4;
+}
+
+[data-theme="dark"] ::selection {
+  background: rgba(255, 59, 86, 0.35);
+  color: #fff;
+}
+
 /* Reduced motion: still the essential state change, drop the flourish */
 @media (prefers-reduced-motion: reduce) {
   .animate-mic-pulse,

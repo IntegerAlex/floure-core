@@ -1,19 +1,17 @@
-// ── Live transcription feed ──
-//
-// Extracted from App.tsx (which held it alongside the engine lifecycle, tray
-// and widget wiring). Presentational plus the mic-permission branch for the
-// mic button; recording itself is owned by App and passed in via `start`/`stop`.
-
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Mic } from "lucide-react";
+// ── Live transcription feed + core-loop quick controls ──
+import { useEffect, useMemo, useRef, useState, memo } from "react";
+import { Mic, TriangleAlert } from "lucide-react";
 import MicButton from "../components/MicButton";
 import ModelBadge from "../components/ModelBadge";
 import ErrorBanner from "../components/ErrorBanner";
 import type { AppError } from "../components/ErrorBanner";
 import Waveform from "../components/Waveform";
+import TabSwitcher from "../components/TabSwitcher";
+import ShortcutRecorder from "../components/ShortcutRecorder";
 import { micLevelEmitter } from "../utils/mic-emitter";
 import { isTauri, formatTimestamp } from "../lib/utils";
 import { type RuntimeSettings } from "../lib/settings";
+import type { PttMode } from "../lib/ptt-mode";
 
 export interface TranscriptLine {
   id: number;
@@ -74,6 +72,51 @@ function SessionStats({ lines }: { lines: TranscriptLine[] }) {
   );
 }
 
+/// One transcript row. Memoized on the line object: setLines rebuilds the
+/// array but keeps unchanged line identities, so streaming token edits
+/// re-render only the last (changing) row instead of all 100 capped rows.
+const TranscriptRow = memo(function TranscriptRow({
+  line,
+  time,
+  timeWidth,
+  dimmed,
+  bordered,
+  onCopyLine,
+}: {
+  line: TranscriptLine;
+  time: string;
+  timeWidth: string;
+  dimmed?: boolean;
+  bordered?: boolean;
+  onCopyLine: (line: TranscriptLine) => void;
+}) {
+  const text = line.processed || line.raw;
+  return (
+    <div
+      className={`group flex items-center justify-between px-4 transition-colors hover:bg-border ${bordered ? "border-t border-border" : ""}`}
+      style={{ paddingTop: "16px", paddingBottom: "16px" }}
+    >
+      <div className="flex min-w-0 flex-1 items-baseline gap-3">
+        <span className={`${timeWidth} shrink-0 text-[13px] text-text-muted`}>{time}</span>
+        <span
+          className={`min-w-0 flex-1 whitespace-pre-wrap break-words text-[16px] leading-[1.7] ${dimmed ? "text-text-primary/70" : "text-text-primary"}`}
+        >
+          {text}
+        </span>
+      </div>
+      <div className="ml-3 flex shrink-0 items-center gap-2 opacity-0 transition-opacity focus-within:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+        <button
+          className="rounded px-1 text-[14px] text-text-muted transition-colors hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          onClick={() => void onCopyLine(line)}
+          aria-label={`Copy line: ${text.slice(0, 60)}`}
+        >
+          Copy
+        </button>
+      </div>
+    </div>
+  );
+});
+
 export function FeedView({
   connected,
   status,
@@ -84,6 +127,7 @@ export function FeedView({
   onFeedScroll,
   start,
   stop,
+  cancel,
   copyLatest,
   copyLine,
   clearLines,
@@ -95,6 +139,16 @@ export function FeedView({
   onRequestMicPermission,
   asrProfile,
   resolvedModel,
+  hotkey,
+  onHotkeyChange,
+  pttMode,
+  onPttModeChange,
+  typing,
+  clipboard,
+  onToggleOutput,
+  soundEnabled,
+  soundVolume,
+  onSoundChange,
 }: {
   connected: boolean;
   status: string;
@@ -105,6 +159,7 @@ export function FeedView({
   onFeedScroll: () => void;
   start: (overrideSettings?: RuntimeSettings, source?: string) => void;
   stop: () => void;
+  cancel: () => void;
   copyLatest: () => void;
   copyLine: (line: TranscriptLine) => void;
   clearLines: () => void;
@@ -116,7 +171,20 @@ export function FeedView({
   onRequestMicPermission: () => void;
   asrProfile: string;
   resolvedModel: { profile: string; model: string; backend: string; device: string } | null;
+  hotkey: string;
+  onHotkeyChange: (next: string) => void;
+  pttMode: PttMode;
+  onPttModeChange: (mode: PttMode) => void;
+  typing: boolean;
+  clipboard: boolean;
+  onToggleOutput: (patch: { typing?: boolean; clipboard?: boolean }) => void;
+  soundEnabled: boolean;
+  soundVolume: number;
+  onSoundChange: (patch: { enabled?: boolean; volume?: number }) => void;
 }) {
+  const [tab, setTab] = useState<"live" | "history">("live");
+  const activeErrors = errors.filter((e) => !e.dismissed);
+
   const handleToggle = () => {
     if (connected) {
       stop();
@@ -229,7 +297,7 @@ export function FeedView({
               </div>
             </div>
           )}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-center gap-2">
             <button
               className="inline-flex h-[36px] items-center gap-2 rounded-[12px] px-4 text-[13px] font-medium text-text-muted transition-colors hover:bg-border hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
               onClick={() => void copyLatest()}
@@ -239,21 +307,116 @@ export function FeedView({
             </button>
             <button
               className="inline-flex h-[36px] items-center gap-2 rounded-[12px] px-4 text-[13px] font-medium text-text-muted transition-colors hover:bg-border hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+              onClick={() => void cancel()}
+              disabled={!connected && lines.every((l) => l.status === "done")}
+            >
+              Cancel
+            </button>
+            <button
+              className="inline-flex h-[36px] items-center gap-2 rounded-[12px] px-4 text-[13px] font-medium text-text-muted transition-colors hover:bg-border hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
               onClick={clearLines}
               disabled={lines.length === 0}
             >
               Clear
             </button>
-            {errors.filter((e) => !e.dismissed).length > 0 && (
+            {activeErrors.length > 0 && (
               <button
                 className="inline-flex h-[36px] items-center gap-2 rounded-[12px] px-4 text-[13px] font-medium text-text-muted transition-colors hover:bg-border hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 onClick={() => setShowErrors((s) => !s)}
               >
-                Errors ({errors.filter((e) => !e.dismissed).length})
+                Errors ({activeErrors.length})
               </button>
             )}
           </div>
         </div>
+
+        {/* Core-loop quick controls: hotkey, activation, output, sound */}
+        <div
+          className="mb-3 grid grid-cols-1 gap-2 rounded-[16px] border border-border bg-app-surface-secondary/60 p-3 sm:grid-cols-2"
+          aria-label="Recording controls"
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-20 shrink-0 text-[12px] font-medium text-text-muted">Hotkey</span>
+            <ShortcutRecorder value={hotkey} onChange={onHotkeyChange} />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-20 shrink-0 text-[12px] font-medium text-text-muted">Press</span>
+            <select
+              aria-label="Push-to-talk activation mode"
+              value={pttMode}
+              onChange={(e) => onPttModeChange(e.target.value as PttMode)}
+              className="h-9 rounded-input border border-border bg-app-surface px-2 text-[13px] text-text-primary focus:border-accent focus:outline-none"
+            >
+              <option value="hold">Hold to talk</option>
+              <option value="toggle">Toggle on/off</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="w-20 shrink-0 text-[12px] font-medium text-text-muted">Output</span>
+            <label className="flex cursor-pointer items-center gap-1.5 text-[13px] text-text-secondary">
+              <input
+                type="checkbox"
+                checked={typing}
+                onChange={(e) => onToggleOutput({ typing: e.target.checked })}
+                aria-label="Type into focused window"
+                className="accent h-4 w-4"
+              />
+              Type
+            </label>
+            <label className="flex cursor-pointer items-center gap-1.5 text-[13px] text-text-secondary">
+              <input
+                type="checkbox"
+                checked={clipboard}
+                onChange={(e) => onToggleOutput({ clipboard: e.target.checked })}
+                aria-label="Copy to clipboard"
+                className="accent h-4 w-4"
+              />
+              Clipboard
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-20 shrink-0 text-[12px] font-medium text-text-muted">Sound</span>
+            <label className="flex cursor-pointer items-center gap-1.5 text-[13px] text-text-secondary">
+              <input
+                type="checkbox"
+                checked={soundEnabled}
+                onChange={(e) => onSoundChange({ enabled: e.target.checked })}
+                aria-label="Play start/stop sounds"
+                className="accent h-4 w-4"
+              />
+              {soundEnabled ? "On" : "Off"}
+            </label>
+            {soundEnabled && (
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.1}
+                value={soundVolume}
+                onChange={(e) => onSoundChange({ volume: Number(e.target.value) })}
+                aria-label="Feedback volume"
+                className="accent w-24"
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Inline error surface (Handy-style): first active error + View log */}
+        {activeErrors.length > 0 && !showErrors && (
+          <div
+            role="alert"
+            className="mb-3 flex items-center gap-2 rounded-[12px] border border-red-500/20 bg-red-500/10 px-4 py-2.5 text-[13px] text-red-600"
+          >
+            <TriangleAlert size={14} className="shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{activeErrors[0].message}</span>
+            <button
+              onClick={() => setShowErrors(true)}
+              className="shrink-0 font-medium underline underline-offset-2 hover:no-underline"
+            >
+              View
+            </button>
+          </div>
+        )}
 
         {/* Feed */}
         <div
@@ -296,6 +459,17 @@ export function FeedView({
             )}
           </div>
 
+          <div className="px-4 pt-2">
+            <TabSwitcher
+              tabs={[
+                { id: "live", label: `Live (${lines.length})` },
+                { id: "history", label: `History (${historyItems.length})` },
+              ]}
+              activeTab={tab}
+              onChange={(id) => setTab(id as "live" | "history")}
+            />
+          </div>
+
           {/* Transcript Lines */}
           <div
             className="flex-1 overflow-auto"
@@ -305,72 +479,56 @@ export function FeedView({
             aria-live="polite"
             aria-label="Transcription feed"
           >
-            {lines.length === 0 && historyItems.length === 0 && !historyLoading ? (
-              <div className="flex h-full flex-col items-center justify-center p-8 text-center">
-                <Mic size={72} strokeWidth={1} className="mb-4 text-accent/40" aria-hidden="true" />
-                <p className="mb-1 text-[15px] text-text-primary">
-                  Start speaking to begin transcription
-                </p>
-                <p className="text-[13px] text-text-muted">
-                  Press{" "}
-                  <kbd className="rounded border border-border-hover bg-border px-1.5 py-0.5 text-[11px] text-text-muted">
-                    Space
-                  </kbd>{" "}
-                  to start or stop
-                </p>
-              </div>
+            {tab === "live" ? (
+              reversedLines.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center p-8 text-center">
+                  <Mic
+                    size={72}
+                    strokeWidth={1}
+                    className="mb-4 text-accent/40"
+                    aria-hidden="true"
+                  />
+                  <p className="mb-1 text-[15px] text-text-primary">
+                    Start speaking to begin transcription
+                  </p>
+                  <p className="text-[13px] text-text-muted">
+                    Press{" "}
+                    <kbd className="rounded border border-border-hover bg-border px-1.5 py-0.5 text-[11px] text-text-muted">
+                      Space
+                    </kbd>{" "}
+                    to start or stop
+                  </p>
+                </div>
+              ) : (
+                reversedLines.map((line) => (
+                  <TranscriptRow
+                    key={`live-${line.id}`}
+                    line={line}
+                    time={new Date(line.createdAt).toLocaleTimeString()}
+                    timeWidth="w-[80px]"
+                    onCopyLine={copyLine}
+                  />
+                ))
+              )
             ) : (
               <>
-                {reversedLines.map((line) => (
-                  <div
-                    key={`live-${line.id}`}
-                    className="group flex items-center justify-between px-4 transition-colors hover:bg-border"
-                    style={{ paddingTop: "16px", paddingBottom: "16px" }}
-                  >
-                    <div className="flex min-w-0 flex-1 items-baseline gap-3">
-                      <span className="w-[80px] shrink-0 text-[13px] text-text-muted">
-                        {new Date(line.createdAt).toLocaleTimeString()}
-                      </span>
-                      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[16px] leading-[1.7] text-text-primary">
-                        {line.processed || line.raw}
-                      </span>
-                    </div>
-                    <div className="ml-3 flex shrink-0 items-center gap-2 opacity-0 transition-opacity focus-within:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
-                      <button
-                        className="rounded px-1 text-[14px] text-text-muted transition-colors hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                        onClick={() => void copyLine(line)}
-                        aria-label={`Copy line: ${(line.processed || line.raw).slice(0, 60)}`}
-                      >
-                        Copy
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {visibleHistory.map((item) => (
-                  <div
-                    key={`hist-${item.id}`}
-                    className="group flex items-center justify-between border-t border-border px-4 transition-colors hover:bg-border"
-                    style={{ paddingTop: "16px", paddingBottom: "16px" }}
-                  >
-                    <div className="flex min-w-0 flex-1 items-baseline gap-3">
-                      <span className="w-[140px] shrink-0 text-[13px] text-text-muted">
-                        {formatTimestamp(item.createdAt)}
-                      </span>
-                      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[16px] leading-[1.7] text-text-primary/70">
-                        {item.processed || item.raw}
-                      </span>
-                    </div>
-                    <div className="ml-3 flex shrink-0 items-center gap-2 opacity-0 transition-opacity focus-within:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
-                      <button
-                        className="rounded px-1 text-[14px] text-text-muted transition-colors hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                        onClick={() => void copyLine(item)}
-                        aria-label={`Copy line: ${(item.processed || item.raw).slice(0, 60)}`}
-                      >
-                        Copy
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                {visibleHistory.length === 0 && !historyLoading ? (
+                  <p className="py-12 text-center text-[15px] text-text-muted">
+                    No past transcripts in this session view — open History for search and filters.
+                  </p>
+                ) : (
+                  visibleHistory.map((item) => (
+                    <TranscriptRow
+                      key={`hist-${item.id}`}
+                      line={item}
+                      time={formatTimestamp(item.createdAt)}
+                      timeWidth="w-[140px]"
+                      dimmed
+                      bordered
+                      onCopyLine={copyLine}
+                    />
+                  ))
+                )}
                 {historyLoading && (
                   <div
                     className="flex flex-col gap-2 px-4 py-4"

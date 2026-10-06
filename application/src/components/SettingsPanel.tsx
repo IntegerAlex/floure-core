@@ -8,9 +8,17 @@ import {
   SlidersHorizontal,
   Search,
   Stethoscope,
+  MonitorCheck,
+  AudioLines,
+  CircleCheck,
+  TriangleAlert,
+  CircleX,
+  LoaderCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/hooks/usePermissions";
+import { micLevelEmitter } from "@/utils/mic-emitter";
+import { parseAppError } from "@/lib/errors";
 import type { RuntimeSettings } from "../lib/settings";
 import { getStoredHotkey, HOTKEY_STORAGE_KEY } from "../lib/settings";
 
@@ -55,6 +63,17 @@ const SECTIONS = [
     keywords: "clipboard microphone mic access permission",
   },
   {
+    id: "system",
+    title: "System",
+    keywords:
+      "system check dependencies audio server pipewire pulse clipboard xclip wl-clipboard disk",
+  },
+  {
+    id: "microphone",
+    title: "Microphone",
+    keywords: "microphone mic test level capture input device",
+  },
+  {
     id: "diagnostics",
     title: "Diagnostics",
     keywords:
@@ -70,6 +89,11 @@ export default function SettingsPanel({ settings, onSave }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedDiag, setCopiedDiag] = useState(false);
   const [copiedLoopback, setCopiedLoopback] = useState(false);
+  const [sysChecks, setSysChecks] = useState<
+    Array<{ name: string; status: string; message: string; fixHint?: string }>
+  >([]);
+  const [sysRunning, setSysRunning] = useState(false);
+  const [micLevel, setMicLevel] = useState(0);
   // Wayland has no core key-grab, so a registered global shortcut often never
   // fires. The loopback control server is the reliable trigger there.
   const isLinux =
@@ -86,6 +110,40 @@ export default function SettingsPanel({ settings, onSave }: Props) {
   useEffect(() => {
     setHotkey(getStoredHotkey());
   }, []);
+
+  // Mic level meter (moved out of onboarding): subscribe only while a test
+  // capture runs, throttled to ~10fps — an unthrottled always-on subscription
+  // re-rendered this whole panel at emitter rate whenever the engine ran.
+  useEffect(() => {
+    if (!isCapturingMic) {
+      setMicLevel(0);
+      return;
+    }
+    let last = 0;
+    return micLevelEmitter.subscribe((level) => {
+      const now = Date.now();
+      if (now - last >= 100) {
+        last = now;
+        setMicLevel(level);
+      }
+    });
+  }, [isCapturingMic]);
+
+  const runSystemChecks = async () => {
+    setSysRunning(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const checks =
+        await invoke<
+          Array<{ name: string; status: string; message: string; fixHint: string | null }>
+        >("check_system_deps");
+      setSysChecks(checks.map((c) => ({ ...c, fixHint: c.fixHint ?? undefined })));
+    } catch (e) {
+      setSysChecks([{ name: "System check", status: "fail", message: parseAppError(e).message }]);
+    } finally {
+      setSysRunning(false);
+    }
+  };
 
   const dirty = JSON.stringify(local) !== JSON.stringify(settings);
   const handleSave = () => {
@@ -302,7 +360,7 @@ export default function SettingsPanel({ settings, onSave }: Props) {
                 checked={local[t.key]}
                 onChange={(e) => update({ [t.key]: e.target.checked })}
                 aria-label={t.label}
-                className="h-5 w-5 accent"
+                className="accent h-5 w-5"
               />
             </label>
           ))}
@@ -499,7 +557,7 @@ export default function SettingsPanel({ settings, onSave }: Props) {
                 if (e.target.checked) void requestClipboard();
               }}
               aria-label="Clipboard permission"
-              className="h-5 w-5 accent"
+              className="accent h-5 w-5"
             />
           </label>
           <div className={checkRow}>
@@ -516,7 +574,7 @@ export default function SettingsPanel({ settings, onSave }: Props) {
                   else if (isCapturingMic) stopMic();
                 }}
                 aria-label="Microphone permission"
-                className="h-5 w-5 accent"
+                className="accent h-5 w-5"
               />
               {permissions.microphone === "granted" && (
                 <button
@@ -531,9 +589,97 @@ export default function SettingsPanel({ settings, onSave }: Props) {
         </div>
         <div
           ref={(el) => {
-            sectionRefs.current.diagnostics = el;
+            sectionRefs.current.system = el;
           }}
           style={{ display: sectionMatches(SECTIONS[6]) ? undefined : "none" }}
+          className="flex flex-col gap-3"
+        >
+          <h3 className="flex items-center gap-2 text-subheading text-text-primary">
+            <MonitorCheck size={15} className="text-text-secondary" />
+            System
+          </h3>
+          <p className="text-small text-text-muted">
+            Dependencies the pipeline shells out to — audio server, clipboard and typing helpers.
+            Moved here from first-run so it stays re-runnable.
+          </p>
+          <div>
+            <button
+              onClick={() => void runSystemChecks()}
+              disabled={sysRunning}
+              className="inline-flex h-9 items-center rounded-button bg-accent px-4 text-small font-medium text-white transition-colors hover:bg-accent-warm disabled:pointer-events-none disabled:opacity-50"
+            >
+              {sysRunning ? "Running…" : sysChecks.length > 0 ? "Re-run Checks" : "Run Checks"}
+            </button>
+          </div>
+          {sysChecks.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {sysChecks.map((c, i) => (
+                <div
+                  key={i}
+                  className="flex items-start gap-3 rounded-card border border-border bg-app-surface px-4 py-3"
+                >
+                  <span className="mt-0.5 shrink-0" aria-hidden="true">
+                    {c.status === "pass" ? (
+                      <CircleCheck size={17} className="text-green-600" />
+                    ) : c.status === "warning" ? (
+                      <TriangleAlert size={17} className="text-yellow-700" />
+                    ) : c.status === "pending" ? (
+                      <LoaderCircle size={17} className="animate-spin text-text-muted" />
+                    ) : (
+                      <CircleX size={17} className="text-red-600" />
+                    )}
+                  </span>
+                  <div className="flex flex-col gap-0.5 text-left">
+                    <strong className="text-body text-text-primary">{c.name}</strong>
+                    <span className="text-small text-text-secondary">{c.message}</span>
+                    {c.fixHint && <span className="text-small text-text-muted">{c.fixHint}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div
+          ref={(el) => {
+            sectionRefs.current.microphone = el;
+          }}
+          style={{ display: sectionMatches(SECTIONS[7]) ? undefined : "none" }}
+          className="flex flex-col gap-3"
+        >
+          <h3 className="flex items-center gap-2 text-subheading text-text-primary">
+            <AudioLines size={15} className="text-text-secondary" />
+            Microphone
+          </h3>
+          <p className="text-small text-text-muted">
+            Live input level and capture test — moved here from first-run.
+          </p>
+          <div
+            className="h-3 w-full overflow-hidden rounded-input border border-border bg-app-surface-secondary"
+            role="meter"
+            aria-label="Microphone input level"
+            aria-valuenow={Math.round(Math.min(100, micLevel * 300))}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className="h-full rounded-input bg-accent transition-[width] duration-75"
+              style={{ width: `${Math.min(100, micLevel * 300)}%` }}
+            />
+          </div>
+          <div>
+            <button
+              onClick={isCapturingMic ? stopMic : () => void requestMic()}
+              className="inline-flex h-9 items-center rounded-button border border-border bg-app-surface px-4 text-small font-medium text-text-primary transition-colors hover:bg-app-hover"
+            >
+              {isCapturingMic ? "Stop Test" : "Test Microphone"}
+            </button>
+          </div>
+        </div>
+        <div
+          ref={(el) => {
+            sectionRefs.current.diagnostics = el;
+          }}
+          style={{ display: sectionMatches(SECTIONS[8]) ? undefined : "none" }}
           className="flex flex-col gap-3"
         >
           <h3 className="flex items-center gap-2 text-subheading text-text-primary">

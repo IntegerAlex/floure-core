@@ -1,4 +1,5 @@
 import { Mic } from "lucide-react";
+import { memo } from "react";
 import { cn } from "@/lib/utils";
 
 interface MicButtonProps {
@@ -7,7 +8,7 @@ interface MicButtonProps {
   onToggle: () => void;
 }
 
-export default function MicButton({ status, connected, onToggle }: MicButtonProps) {
+export default memo(function MicButton({ status, connected, onToggle }: MicButtonProps) {
   const isListening = status === "listening";
   const isError = status === "error";
   const isTranscribing = status === "transcribing";
@@ -23,11 +24,11 @@ export default function MicButton({ status, connected, onToggle }: MicButtonProp
         className={cn(
           "relative flex items-center justify-center rounded-full transition duration-200",
           "h-[80px] w-[80px]",
+          // Instant press feedback: the backend start round-trips async, so the
+          // button itself must acknowledge the tap within one frame.
+          "active:scale-95",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-app-bg",
-          isError && [
-            "border-2 border-danger bg-app-surface-secondary",
-            "shadow-danger-glow",
-          ],
+          isError && ["border-2 border-danger bg-app-surface-secondary", "shadow-danger-glow"],
           isPulsing && [
             "border-2 border-accent bg-accent",
             "shadow-[0_1px_2px_rgba(0,0,0,0.08),0_4px_12px_rgba(0,0,0,0.08)]",
@@ -70,4 +71,4 @@ export default function MicButton({ status, connected, onToggle }: MicButtonProp
       )}
     </div>
   );
-}
+});

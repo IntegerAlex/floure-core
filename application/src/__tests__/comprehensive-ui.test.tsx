@@ -68,7 +68,7 @@ vi.mock("@/hooks/useOnboarding", () => ({
   useOnboarding: vi.fn(() => ({
     state: {
       step: 0,
-      totalSteps: 5,
+      totalSteps: 3,
       completed: false,
       skipped: false,
       systemChecks: [],
@@ -1019,12 +1019,12 @@ describe("HistoryPage", () => {
 describe("OnboardingWizard", () => {
   it("renders without crashing", () => {
     renderWithProviders(<OnboardingWizard onFinished={() => {}} />);
-    expect(screen.getByText("System Check")).toBeInTheDocument();
+    expect(screen.getByText("Permissions")).toBeInTheDocument();
   });
 
-  it("shows Run Checks button initially", () => {
+  it("shows Continue button initially", () => {
     renderWithProviders(<OnboardingWizard onFinished={() => {}} />);
-    expect(screen.getByText("Run Checks")).toBeInTheDocument();
+    expect(screen.getByText("Continue")).toBeInTheDocument();
   });
 });
 
@@ -1050,9 +1050,9 @@ describe("onboardingReducer", () => {
   });
 
   it("NEXT_STEP does not exceed totalSteps", () => {
-    const state = { ...DEFAULT_ONBOARDING, step: 5 };
+    const state = { ...DEFAULT_ONBOARDING, step: 3 };
     const result = onboardingReducer(state, { type: "NEXT_STEP" });
-    expect(result.step).toBe(5);
+    expect(result.step).toBe(3);
   });
 
   it("SET_COMPLETED marks completed", () => {
@@ -1115,7 +1115,7 @@ describe("onboardingReducer", () => {
 describe("DEFAULT_ONBOARDING", () => {
   it("has correct initial values", () => {
     expect(DEFAULT_ONBOARDING.step).toBe(0);
-    expect(DEFAULT_ONBOARDING.totalSteps).toBe(5);
+    expect(DEFAULT_ONBOARDING.totalSteps).toBe(3);
     expect(DEFAULT_ONBOARDING.completed).toBe(false);
     expect(DEFAULT_ONBOARDING.systemChecks).toEqual([]);
     expect(DEFAULT_ONBOARDING.clipboardEnabled).toBe(true);

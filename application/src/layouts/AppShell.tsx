@@ -8,10 +8,11 @@ interface AppShellProps extends React.HTMLAttributes<HTMLDivElement> {
   children: React.ReactNode;
   activeItem: string;
   onNavigate: (item: string) => void;
+  footer?: React.ReactNode;
 }
 
 export const AppShell = forwardRef<HTMLDivElement, AppShellProps>(
-  ({ className, children, activeItem, onNavigate, ...props }, ref) => {
+  ({ className, children, activeItem, onNavigate, footer, ...props }, ref) => {
     const win = isTauri() ? getCurrentWindow() : null;
 
     const onTitleBarMouseDown = useCallback(
@@ -37,7 +38,10 @@ export const AppShell = forwardRef<HTMLDivElement, AppShellProps>(
     return (
       <div
         ref={ref}
-        className={cn("relative flex h-screen overflow-hidden bg-app-bg text-text-primary", className)}
+        className={cn(
+          "relative flex h-screen overflow-hidden bg-app-bg text-text-primary",
+          className,
+        )}
         {...props}
       >
         {/* Skip link: invisible until focused, jumps past sidebar + titlebar */}
@@ -92,6 +96,7 @@ export const AppShell = forwardRef<HTMLDivElement, AppShellProps>(
           <main id="main-content" tabIndex={-1} className="flex-1 overflow-auto">
             {children}
           </main>
+          {footer}
         </div>
       </div>
     );

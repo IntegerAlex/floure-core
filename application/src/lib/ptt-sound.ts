@@ -7,6 +7,20 @@
 
 let ctx: AudioContext | null = null;
 
+function prefs(): { on: boolean; volume: number } {
+  if (typeof window === "undefined") return { on: true, volume: 1 };
+  try {
+    const on = localStorage.getItem("stt-sound-enabled");
+    const raw = Number(localStorage.getItem("stt-sound-volume"));
+    return {
+      on: on === null ? true : on === "1",
+      volume: Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 1,
+    };
+  } catch {
+    return { on: true, volume: 1 };
+  }
+}
+
 function context(): AudioContext | null {
   if (typeof window === "undefined") return null;
   try {
@@ -19,6 +33,8 @@ function context(): AudioContext | null {
 }
 
 function blip(fromHz: number, toHz: number) {
+  const { on, volume } = prefs();
+  if (!on || volume <= 0) return;
   const ac = context();
   if (!ac) return;
   try {
@@ -29,7 +45,7 @@ function blip(fromHz: number, toHz: number) {
     osc.frequency.setValueAtTime(fromHz, t);
     osc.frequency.exponentialRampToValueAtTime(toHz, t + 0.09);
     gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.25, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.25 * volume, t + 0.015);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
     osc.connect(gain).connect(ac.destination);
     osc.start(t);

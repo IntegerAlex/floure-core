@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Zap, Gauge, Rocket, Sparkles } from "lucide-react";
 
 const PROFILE_INFO: Record<
@@ -35,7 +36,7 @@ interface ModelBadgeProps {
   resolvedModel: { profile: string; model: string; backend: string; device: string } | null;
 }
 
-export default function ModelBadge({ profile, resolvedModel }: ModelBadgeProps) {
+export default memo(function ModelBadge({ profile, resolvedModel }: ModelBadgeProps) {
   // Use backend-resolved info when available, fall back to profile defaults
   const resolvedProfile = resolvedModel?.profile || profile;
   const info = PROFILE_INFO[resolvedProfile] ?? PROFILE_INFO.auto;
@@ -60,4 +61,4 @@ export default function ModelBadge({ profile, resolvedModel }: ModelBadgeProps) 
       )}
     </div>
   );
-}
+});
