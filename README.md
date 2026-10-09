@@ -8,6 +8,8 @@ mic (cpal) → Silero VAD → Parakeet / Whisper (sherpa-onnx)
   → type into focused window / clipboard
 ```
 
+### ▶ [Watch the promo](promo.mp4)
+
 ## Models
 
 Downloaded on demand from the Models page (resumable, verified — see `docs/adr/0003-model-downloads.md`).
