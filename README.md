@@ -8,7 +8,15 @@ mic (cpal) → Silero VAD → Parakeet / Whisper (sherpa-onnx)
   → type into focused window / clipboard
 ```
 
-### ▶ [Watch the promo](promo.mp4)
+<div align="center">
+
+  <a href="promo.mp4">
+    <img src="promo.webp" alt="Floure — speak naturally, get clean text" width="900">
+  </a>
+
+  <p><em>Floure promo — click to play with sound</em></p>
+
+</div>
 
 ## Models
 
