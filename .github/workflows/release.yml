@@ -91,12 +91,18 @@ jobs:
           # another workflow run, so this cannot re-trigger the `tags: v*`
           # path above and race itself. Swapping in a PAT *would* double-fire.
           RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases/tags/$TAG" --jq '.id' 2>/dev/null || true)
-          if [ -z "$RELEASE_ID" ]; then
+          # `gh api` may print the JSON 404 response body to stdout. Treat only
+          # a numeric ID as success so that body cannot leak into tauri-action.
+          if ! [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]; then
             RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases" \
               -f tag_name="$TAG" \
               -f name="$TAG" \
               -f target_commitish="$GITHUB_SHA" \
               --jq '.id')
+          fi
+          if ! [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not resolve a numeric GitHub release ID for $TAG"
+            exit 1
           fi
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
@@ -220,6 +226,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GitHub's Ubuntu runners lack a usable FUSE2 mount for linuxdeploy.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          # Ubuntu 24's .relr.dyn sections crash linuxdeploy's bundled strip.
+          NO_STRIP: "true"
         with:
           projectPath: application
           # releaseId is only set when resolve-release managed to create the
