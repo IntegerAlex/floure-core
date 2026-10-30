@@ -222,6 +222,15 @@ jobs:
             libasound2-dev \
             libdbus-1-dev
 
+      - name: Pin linuxdeploy AppImage plugin
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          mkdir -p ~/.cache/tauri
+          curl -fsSL \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-appimage-x86_64.AppImage \
+            -o ~/.cache/tauri/linuxdeploy-plugin-appimage.AppImage
+          chmod +x ~/.cache/tauri/linuxdeploy-plugin-appimage.AppImage
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
