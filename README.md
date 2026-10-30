@@ -33,6 +33,15 @@ Downloaded on demand from the Models page (resumable, verified — see `docs/adr
 
 Cloud cleanup (optional): OpenRouter (`OPENROUTER_API_KEY`, default `openai/gpt-4o-mini`).
 
+## Linux installation
+
+Linux release assets are published on the [GitHub Releases page](https://github.com/IntegerAlex/floure-core/releases):
+
+- Debian/Ubuntu: install the `.deb` with `sudo apt install ./floure_*.deb`.
+- Fedora/RHEL: install the `.rpm` with `sudo dnf install ./floure-*.rpm`.
+- Arch Linux (x86_64): install the `.pkg.tar.zst` with `sudo pacman -U ./floure-*.pkg.tar.zst`.
+- Portable: run the `.AppImage` release asset.
+
 ## Run from source
 
 Prerequisites: pnpm, Rust toolchain, a mic, and (Linux) PipeWire/PulseAudio.

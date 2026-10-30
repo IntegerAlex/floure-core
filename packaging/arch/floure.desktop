@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Floure
+Comment=Local-first speech-to-text dictation
+Exec=floure
+Icon=floure
+Terminal=false
+Categories=Utility;AudioVideo;

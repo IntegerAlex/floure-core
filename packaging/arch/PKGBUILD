@@ -1,0 +1,43 @@
+pkgname=floure
+pkgver=0.2.0
+pkgrel=1
+pkgdesc='Local-first speech-to-text dictation desktop app'
+arch=('x86_64')
+url='https://github.com/IntegerAlex/floure-core'
+license=('GPL-2.0-only')
+options=('!debug')
+depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'librsvg' 'openssl' 'alsa-lib')
+makedepends=('clang' 'cmake' 'dbus' 'gtk3' 'libayatana-appindicator' 'librsvg' 'nodejs' 'openssl' 'alsa-lib' 'pnpm' 'rust' 'webkit2gtk-4.1')
+optdepends=(
+  'xdotool: type text and paste on X11'
+  'xclip: clipboard support on X11'
+  'wl-clipboard: clipboard support on Wayland'
+  'wtype: type text on Wayland'
+)
+_source_version=${pkgver//_/-}
+source=(
+  "$pkgname-$pkgver.tar.gz::https://github.com/IntegerAlex/floure-core/archive/refs/tags/v${_source_version}.tar.gz"
+  'floure.desktop'
+)
+sha256sums=('SKIP' 'SKIP')
+
+prepare() {
+  cd "$srcdir/floure-core-$_source_version"
+  sed -i -E "s/^  \"version\": \"[^\"]+\",/  \"version\": \"$_source_version\",/" application/src-tauri/tauri.conf.json
+  sed -i -E "s/^version = \"[^\"]+\"/version = \"$_source_version\"/" application/src-tauri/Cargo.toml
+}
+
+build() {
+  cd "$srcdir/floure-core-$_source_version/application"
+  pnpm install --frozen-lockfile
+  pnpm build
+  cargo build --release --locked --manifest-path src-tauri/Cargo.toml
+}
+
+package() {
+  install -Dm755 "$srcdir/floure-core-$_source_version/application/src-tauri/target/release/floure" "$pkgdir/usr/bin/floure"
+  install -Dm644 "$srcdir/floure.desktop" "$pkgdir/usr/share/applications/floure.desktop"
+  install -Dm644 "$srcdir/floure-core-$_source_version/application/src-tauri/icons/128x128.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/floure.png"
+  install -Dm644 "$srcdir/floure-core-$_source_version/application/src-tauri/icons/128x128@2x.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/floure.png"
+  install -Dm644 "$srcdir/floure-core-$_source_version/LICENSE" "$pkgdir/usr/share/licenses/floure/LICENSE"
+}

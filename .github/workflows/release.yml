@@ -241,3 +241,59 @@ jobs:
             application/src-tauri/target/release/bundle/**/*.deb
             application/src-tauri/target/release/bundle/**/*.rpm
           if-no-files-found: warn
+
+  arch-package:
+    name: Build Arch Package
+    needs: [resolve-release, release]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ needs.resolve-release.outputs.tag }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-release.outputs.tag }}
+
+      - name: Build package in Arch Linux
+        shell: bash
+        env:
+          VERSION: ${{ needs.resolve-release.outputs.version }}
+        run: |
+          build_dir="$RUNNER_TEMP/arch-build"
+          mkdir -p "$build_dir/packaging"
+          cp -a packaging/arch "$build_dir/packaging/arch"
+          arch_pkgver="${VERSION//-/_}"
+          sed -i -E "s/^pkgver=.*/pkgver=$arch_pkgver/" "$build_dir/packaging/arch/PKGBUILD"
+
+          docker run --rm \
+            --volume "$build_dir:/build" \
+            --workdir /build/packaging/arch \
+            archlinux:base-devel \
+            /bin/bash -euxo pipefail -c '
+              pacman -Syu --noconfirm
+              pacman -S --needed --noconfirm clang cmake curl dbus gtk3 libayatana-appindicator librsvg nodejs openssl alsa-lib pnpm rust webkit2gtk-4.1
+              useradd --create-home builder
+              chown -R builder:builder /build
+              runuser -u builder -- env CARGO_BUILD_JOBS=2 CMAKE_BUILD_PARALLEL_LEVEL=2 makepkg --syncdeps --noconfirm
+            '
+
+          mapfile -t packages < <(find "$build_dir/packaging/arch" -maxdepth 1 -type f -name 'floure-*.pkg.tar.zst')
+          if [ "${#packages[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one Arch package, found ${#packages[@]}"
+            exit 1
+          fi
+          mkdir -p release-assets
+          cp "${packages[0]}" release-assets/
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: floure-arch-x86_64
+          path: release-assets/*.pkg.tar.zst
+          if-no-files-found: error
+
+      - name: Attach package to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve-release.outputs.tag }}
+        run: gh release upload "$TAG" release-assets/*.pkg.tar.zst --clobber
