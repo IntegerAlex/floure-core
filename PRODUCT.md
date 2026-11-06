@@ -46,7 +46,7 @@ The name Floure, the local-first privacy claim, the GPL-3.0-or-later license, an
 
 - `README.md` documents the pipeline, models, configuration paths, Wayland loopback, dictionary behaviour, and diagnostics.
 - `CONTEXT.md` documents the stack, key paths, and build commands.
-- `application/src-tauri/src/` contains the working audio, VAD, ASR, LLM, output, pipeline, history, model, config, and diagnostics logic to reuse.
+- `crates/floure-core/` contains the audio, VAD, ASR, LLM, output, pipeline, history, model, config, and diagnostics logic. `crates/floure-app/` contains the GPUI shell.
 - `application/src/` and `packaging/arch/` are the current UI and packaging evidence.
 - There is no real usage dataset in the repo; stats must render from the user's local history, never invented figures.
 

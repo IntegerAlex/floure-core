@@ -1,201 +1,171 @@
-# Floure — Local Speech-to-Text
+# Floure — local dictation
 
-Floure listens to your mic, transcribes your speech, cleans it up with an LLM, and types it into whatever you're focused on. No cloud required. No account. The default setup runs entirely on your machine.
+Floure turns speech into clean text on your own machine. Press the shortcut,
+speak, and the transcript is typed into the window that had focus or copied to
+the clipboard. No account, no cloud dependency on the default path.
 
 ```
 mic (cpal) → Silero VAD → Parakeet / Whisper (sherpa-onnx)
-  → LLM cleanup (local S1-Mini via llama.cpp, or OpenRouter cloud)
-  → type into focused window / clipboard
+  → optional cleanup (local llama.cpp or OpenRouter)
+  → type into the focused window / clipboard
 ```
 
-<div align="center">
+The application is a native Rust binary built with [GPUI](https://gpui.rs/).
+There is no webview, no Node build step, and no browser process.
 
-  <a href="promo.mp4">
-    <img src="promo.webp" alt="Floure — speak naturally, get clean text" width="900">
-  </a>
+## Requirements
 
-  <p><em>Floure promo — click to play with sound</em></p>
+- Linux (X11 or Wayland) with working Vulkan or OpenGL drivers. GPUI renders
+  through the GPU and has no software fallback for the window itself.
+- A microphone through PipeWire, PulseAudio, or ALSA.
+- About 1 GB of disk for the recommended ASR and cleanup models.
 
-</div>
+## Install
 
-## Models
+Release assets are published on the GitHub releases page:
 
-Downloaded on demand from the Models page (resumable, verified — see `docs/adr/0003-model-downloads.md`).
+- Debian/Ubuntu: `sudo apt install ./floure_*.deb`
+- Fedora/RHEL: `sudo dnf install ./floure-*.rpm`
+- Arch Linux: `sudo pacman -U ./floure-*.pkg.tar.zst`
+- Any distribution: extract the portable `.tar.gz` and put `bin/floure` on
+  `PATH`; `INSTALL.md` inside covers the optional desktop entry.
 
-| Model | Backend | Size | Notes |
-|---|---|---|---|
-| Parakeet TDT 0.6B v2 (int8) | sherpa-onnx | ~460 MB | Default ASR. Fast English dictation. Recommended. |
-| Whisper large-v3-turbo | sherpa-onnx | ~540 MB | Multilingual, high accuracy |
-| Whisper base | sherpa-onnx | ~200 MB | Lightweight, any language |
-| Silero VAD | sherpa-onnx | ~630 KB | Speech detection, auto-downloaded |
-| S1-Mini Q4_K_M | llama.cpp | ~462 MB | Default local LLM for cleanup. Recommended. |
-| Gemma 3 1B IT Q4_K_M | llama.cpp | ~806 MB | Alternative local LLM |
+Models download on first run from **Configuration → Models**. Nothing is
+downloaded until you ask for it.
 
-Cloud cleanup (optional): OpenRouter (`OPENROUTER_API_KEY`, default `openai/gpt-4o-mini`).
+## Build from source
 
-## Linux installation
-
-Linux release assets are published on the [GitHub Releases page](https://github.com/IntegerAlex/floure-core/releases):
-
-- Debian/Ubuntu: install the `.deb` with `sudo apt install ./floure_*.deb`.
-- Fedora/RHEL: install the `.rpm` with `sudo dnf install ./floure-*.rpm`.
-- Arch Linux (x86_64): install the `.pkg.tar.zst` with `sudo pacman -U ./floure-*.pkg.tar.zst`.
-- Portable: run the `.AppImage` release asset.
-
-## Run from source
-
-Prerequisites: pnpm, Rust toolchain, a mic, and (Linux) PipeWire/PulseAudio.
+The workspace pins Rust 1.99.1 through `mise.toml`. With `mise` installed:
 
 ```bash
-cd application && pnpm install
-pnpm tauri dev          # full desktop app (Vite + Rust backend)
+mise install
+cargo build -p floure-app          # target/debug/floure
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
 ```
 
-Useful slices:
+Without `mise`, install Rust 1.99.1 with rustup and run the same commands.
+The first build compiles sherpa-onnx and llama.cpp, so it takes a while.
+
+Run it:
 
 ```bash
-cd application && pnpm dev                 # frontend only
-cd application && pnpm build               # frontend build
-cd application/src-tauri && cargo check    # Rust check
-cd application/src-tauri && cargo test     # Rust tests
-cd application && npx vitest run           # frontend tests
+./target/debug/floure
 ```
 
-### Local GPU offload (optional)
+## The four screens
 
-Default builds link llama.cpp statically with CPU inference and need no Vulkan
-toolchain — the result is a single self-contained binary. ASR is CPU either way
-(int8 is already sub-second per utterance).
+- **Dictate** — the microphone, the current transcript, Copy/Cancel/Clear, and
+  a one-line session strip (words, WPM, elapsed). Errors stay visible until
+  dismissed or retried.
+- **History** — FTS-backed search (`Ctrl+F` focuses it), date groups, filters,
+  favorites, copy/delete, multi-select delete, and CSV export of the filtered
+  result.
+- **Stats** — words this week, sessions, streak, average WPM, a 12-week
+  activity grid, and weekly bars. Every value comes from your local history.
+- **Configuration** — one page with General, Shortcuts, Models, Dictionary,
+  Cleanup, Output, Microphone & Output, and Diagnostics. Engine-affecting
+  rows stage behind Apply; output and device rows save immediately.
 
-To offload the local LLM to a GPU, build the Vulkan backend:
+First run opens a three-step setup: microphone, model, trigger. It can be
+re-run from Configuration → General.
+
+## Triggers
+
+| Platform | How to start and stop |
+|---|---|
+| Linux X11 | Configurable global shortcut (default `Ctrl+Shift+F12`), hold or toggle |
+| Linux Wayland | Bind `floure --toggle` in your compositor, use the tray, or POST to the loopback server |
+| Any | Tray menu (`Start recording` / `Stop recording`), or the microphone button in the window |
+
+Wayland has no reliable global key grab. Floure therefore runs a loopback
+control server on `127.0.0.1:17833` and ships a CLI:
 
 ```bash
-cd application && pnpm tauri build -- --features vulkan
+floure --toggle     # start/stop
+floure --start
+floure --stop
+floure --show       # raise the window
+floure --status     # JSON state
+floure --diagnostics
 ```
 
-That requires a Vulkan toolchain at build time (Vulkan loader + headers, a GPU
-with a Vulkan ICD, `glslc` and SPIRV-Headers). At runtime the device is picked
-automatically — discrete NVIDIA → AMD → CPU (`application/src-tauri/src/compute.rs`) — and can be overridden with `FLOURE_COMPUTE=cpu|vulkan` and `FLOURE_MAIN_GPU=<index>`.
+Hyprland example:
 
-## Configuration
+```
+bind = SUPER, D, exec, floure --toggle
+```
+
+Sway example:
+
+```
+bindsym $mod+d exec floure --toggle
+```
+
+On GNOME Wayland, typing into other applications requires `ydotool`; without
+it Floure still copies the transcript to the clipboard. It never claims typing
+parity it cannot deliver.
+
+## Data and privacy
 
 | What | Where |
 |---|---|
-| App config | `~/.config/floure/config.json` |
+| Config | `~/.config/floure/config.json` |
 | Transcripts (SQLite + FTS5) | `~/.local/share/floure/history.db` |
 | Models | `~/.local/share/floure/models/` |
-| Diagnostics record | `~/.local/share/floure/diagnostics.json` |
-| Data dir override | `STT_DATA_DIR` env var |
+| Diagnostics | `~/.local/share/floure/diagnostics.json` |
+| Recent errors | `~/.local/share/floure/recent-errors.log` |
+| Data dir override | `STT_DATA_DIR` |
 
-Copy `.env.example` to `.env` for API keys and optional overrides.
+Audio is processed locally. When you choose OpenRouter cleanup, the transcript
+text is sent to that provider for that request; the OpenRouter key is kept for
+the session only. The default ASR and the local cleanup model run entirely on
+this machine.
 
-## Desktop UI
+Floure does not move focus away from the window you are writing into. The
+tray, the loopback server, and the window all use the same engine state.
 
-Every section is a page in the main window — nothing opens as a modal:
+## Models
 
-- **Onboarding wizard** — system checks, mic test, model download, permissions
-- **Live transcription feed** — mic level, waveform, push-to-talk
-- **Model management** — browse, download with progress, status, delete, disk usage
-- **History** — full-text search over past transcripts (SQLite FTS5), date-range filter, recopy, favorites
-- **Dictionary** — custom vocabulary that also biases recognition (see below)
-- **Settings** — ASR profile, language, hotwords, LLM provider/mode, API keys, push-to-talk, permissions, diagnostics
-- **Insights** — usage heatmap, streaks, stats
-- **Widget mode** — compact always-on-top mini window; **system tray** with start/stop
+| Model | Backend | Size | Notes |
+|---|---|---|---|
+| Parakeet TDT 0.6B v2 (int8) | sherpa-onnx | ~460 MB | Default ASR, recommended |
+| Whisper large-v3-turbo | sherpa-onnx | ~540 MB | Multilingual |
+| Whisper base | sherpa-onnx | ~200 MB | Lightweight |
+| Silero VAD | sherpa-onnx | ~630 KB | Voice activity, auto-downloaded |
+| S1-Mini Q4_K_M | llama.cpp | ~462 MB | Default local cleanup |
+| Gemma 3 1B IT Q4_K_M | llama.cpp | ~806 MB | Alternative cleanup |
 
-## Push-to-talk
+Model downloads are resumable and verified against the manifest.
 
-Hold to record, release to transcribe.
+## Dictionary
 
-| Platform | Trigger |
-|---|---|
-| Windows | `Ctrl+Shift+F12`, or hold bare `Ctrl+Win` |
-| Linux (X11) | `Ctrl+Shift+F12` |
-| Linux (Wayland) | The loopback control server — see below |
-| Any | Tray menu (Start / Stop), or the widget's mic button |
+Dictionary entries feed the recogniser's decode bias, not a find-and-replace
+pass, so names and jargon are heard correctly the first time. Entries can be
+favorited; hotwords are edited in the same section. History rows can be starred
+for later reference.
 
-### Wayland: why the hotkey may not fire
+## Architecture
 
-Wayland has no core key-grab, and whether `org.freedesktop.portal.GlobalShortcuts`
-works is up to the compositor — GNOME and KDE implement it, wlroots-based
-compositors (Sway, Hyprland) historically do not. A hotkey can therefore
-register successfully and still never fire.
-
-Floure ships a loopback-only control server that always works. Bind a compositor
-key to it:
-
-```bash
-curl -X POST localhost:17833/toggle
+```
+crates/floure-core/   engine: audio, VAD, ASR, LLM, models, config,
+                      history, dictionary, insights, diagnostics, events
+crates/floure-app/    GPUI binary: shell, views, tray, hotkeys, loopback, CLI
+packaging/            desktop entry, metainfo, icons, PKGBUILD, portable script
+docs/adr/             architecture decisions
 ```
 
-```ini
-# Sway / i3
-bindsym $mod+d exec "curl -X POST localhost:17833/toggle"
-```
-```ini
-# Hyprland
-bind = $mod, D, exec, curl -X POST localhost:17833/toggle
-```
+`floure-core` has no UI dependency. The engine emits `EngineEvent` on a
+broadcast channel; the GPUI foreground executor consumes it without blocking
+the render thread. `Engine::stop()` signals and returns; the worker flushes and
+joins off-thread and emits `Stopped`.
 
-Settings → Push-to-Talk shows the same command with a copy button. The server is
-also what the Waybar and `wm-config/` integrations drive:
-
-| Endpoint | Effect |
-|---|---|
-| `GET /status` | `{"state":"listening"\|"idle","recording":bool}` |
-| `POST /toggle` | flip recording |
-| `POST /start` / `POST /stop` | explicit control |
-| `POST /show` | focus the main window |
-
-Port defaults to 17833; override with `FLOURE_PORT`. The server binds to
-`127.0.0.1` only.
-
-## Dictionary and recognition accuracy
-
-Words added on the Dictionary page are not just a find-and-replace table: the
-replacement forms are merged into the recogniser's decode bias, so a correction
-improves future transcriptions rather than only the stored text. Favourites are
-weighted first, and the list is capped so a large dictionary cannot slow the
-beam search. Manual hotwords from Settings are merged in alongside them.
-
-## Troubleshooting
-
-Settings → **Diagnostics** has a **Copy diagnostics** button that copies a local
-record of what Floure ran against: OS and version, display server
-(wayland / x11), audio server (pipewire / pulseaudio / alsa), the microphone
-format it negotiated (sample rate, channels, sample format), and the selected
-engines. It is written to `~/.local/share/floure/diagnostics.json` and is never
-sent anywhere — copying it is a deliberate action. `DO_NOT_TRACK=1` disables
-even the local write.
-
-Most audio problems are environment-specific, and that record is what makes them
-diagnosable:
-
-- **Microphone not detected** — a saved device that has gone missing falls back
-  to the system default instead of failing, and every sample format cpal reports
-  is handled (f32, f64, i8–i64, u8–u64). If a device still fails, the
-  diagnostics record names the format it reported.
-- **Bluetooth headset** — switching between A2DP (44.1/48 kHz, stereo) and HFP
-  (8/16 kHz, mono) mid-recording changes the device under the stream. Floure
-  stops the run cleanly and says so, rather than typing from a dead buffer.
-- **Last words missing** — the trailing segment needs ~0.7 s of silence to
-  close, derived from the negotiated sample rate rather than a fixed sample
-  count, so high-rate microphones are not cut short.
-
-Transcripts are saved with raw text, cleaned text, LLM mode, provider, model, and timestamp.
-
-## Docs
-
-- [CONTEXT.md](CONTEXT.md) — project brief, layout, commands
-- [docs/adr/](docs/adr/) — architecture decisions (native backend, DB path, model downloads)
-- [docs/](docs/) — algorithms and voice research notes
-- [docs/ux/](docs/ux/) — UX and cross-environment robustness research
+The previous Tauri/React implementation remains under `application/` only to
+ship the one-time settings bridge (hotkey, activation mode, sound, onboarding)
+into `~/.config/floure/ui-state.json`, which the GPUI migration reads and
+retires. It is not part of the build, CI, or release path.
 
 ## License
 
-GNU General Public License v2.0 — see [LICENSE](LICENSE).
-
----
-
-<p align="center">
-  <sub>Designed and developed by <a href="https://www.akshatkotpalliwar.in/"><b>Akshat Kotpalliwar</b></a></sub>
-</p>
+GPL-3.0-or-later. The repository was relicensed from GPL-2.0-only because GPUI
+and gpui-component are Apache-2.0-only; see `docs/adr/0006-license.md`.
