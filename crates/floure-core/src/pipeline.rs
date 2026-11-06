@@ -449,7 +449,7 @@ fn build_recognizers(
 
     if verify_model(&config.model_dir, find_model(model_id).unwrap()) {
         match config.asr_profile {
-            crate::config::AsrProfile::Parakeet => {
+            crate::config::AsrProfile::Parakeet | crate::config::AsrProfile::ParakeetUltra => {
                 // No vocabulary means no biasing: greedy search is
                 // faster and the bench baseline shows it is not less
                 // accurate without hotwords.

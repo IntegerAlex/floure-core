@@ -129,14 +129,18 @@ tray, the loopback server, and the window all use the same engine state.
 
 | Model | Backend | Size | Notes |
 |---|---|---|---|
-| Parakeet TDT 0.6B v2 (int8) | sherpa-onnx | ~460 MB | Default ASR, recommended |
+| Parakeet TDT 0.6B v2 (int8) | sherpa-onnx | ~460 MB | Fast English dictation |
+| Parakeet Ultra (int8) | sherpa-onnx | ~670 MB | Moondream's multilingual tuning of Parakeet v3 |
 | Whisper large-v3-turbo | sherpa-onnx | ~540 MB | Multilingual |
 | Whisper base | sherpa-onnx | ~200 MB | Lightweight |
 | Silero VAD | sherpa-onnx | ~630 KB | Voice activity, auto-downloaded |
 | S1-Mini Q4_K_M | llama.cpp | ~462 MB | Default local cleanup |
 | Gemma 3 1B IT Q4_K_M | llama.cpp | ~806 MB | Alternative cleanup |
 
-Model downloads are resumable and verified against the manifest.
+Model downloads are resumable and verified against the manifest. Parakeet
+Ultra is the community sherpa-onnx int8 conversion of Moondream's model
+(`tpmaerk/parakeet-ultra-sherpa-onnx-int8`, CC-BY-4.0); the weights derive from
+NVIDIA Parakeet TDT 0.6B v3. Other ASR weights are CC-BY-4.0 from NVIDIA.
 
 ## Dictionary
 

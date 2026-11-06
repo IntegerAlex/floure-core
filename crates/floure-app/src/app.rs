@@ -552,6 +552,13 @@ impl FloureApp {
         cx.notify();
     }
 
+    pub fn go_models(&mut self, cx: &mut Context<Self>) {
+        self.destination = Destination::Configuration;
+        self.config_section = 2;
+        self.refresh_data();
+        cx.notify();
+    }
+
     pub fn go(&mut self, destination: Destination, cx: &mut Context<Self>) {
         if self.destination != destination {
             self.destination = destination;
@@ -755,7 +762,8 @@ impl FloureApp {
 
     pub fn cycle_profile(&mut self) {
         self.config.asr_profile = match self.config.asr_profile {
-            AsrProfile::Parakeet => AsrProfile::WhisperTurbo,
+            AsrProfile::Parakeet => AsrProfile::ParakeetUltra,
+            AsrProfile::ParakeetUltra => AsrProfile::WhisperTurbo,
             AsrProfile::WhisperTurbo => AsrProfile::WhisperBase,
             AsrProfile::WhisperBase => AsrProfile::Parakeet,
         };

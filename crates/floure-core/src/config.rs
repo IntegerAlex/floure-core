@@ -7,6 +7,8 @@ use crate::llm::LlmMode;
 pub enum AsrProfile {
     #[serde(rename = "parakeet")]
     Parakeet,
+    #[serde(rename = "parakeet-ultra")]
+    ParakeetUltra,
     #[serde(rename = "whisper-turbo")]
     WhisperTurbo,
     #[serde(rename = "whisper-base")]
@@ -17,6 +19,7 @@ impl AsrProfile {
     pub fn model_id(&self) -> &'static str {
         match self {
             Self::Parakeet => "parakeet-tdt-0.6b-v2-int8",
+            Self::ParakeetUltra => "parakeet-ultra-int8",
             Self::WhisperTurbo => "whisper-large-v3-turbo-q5_1",
             Self::WhisperBase => "whisper-base-q5_1",
         }
@@ -375,6 +378,18 @@ mod tests {
         assert!(config.sound_enabled);
         assert!((config.sound_volume - 1.0).abs() < 1e-6);
         assert!(!config.onboarding_completed);
+    }
+
+    #[test]
+    fn parakeet_ultra_maps_to_its_own_bundle() {
+        assert_eq!(
+            super::AsrProfile::ParakeetUltra.model_id(),
+            "parakeet-ultra-int8"
+        );
+        assert_ne!(
+            super::AsrProfile::Parakeet.model_id(),
+            super::AsrProfile::ParakeetUltra.model_id()
+        );
     }
 
     #[test]

@@ -265,6 +265,35 @@ fn shortcuts(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
 
 fn models(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
     let mut list = div().flex().flex_col();
+    if !app.model_progress.is_empty() {
+        let mut downloads = div().flex().flex_col().gap(px(4.0)).pb(theme::SPACE_3);
+        downloads = downloads.child(
+            div()
+                .text_size(theme::TEXT_XS)
+                .text_color(theme::text_secondary())
+                .child("Downloading"),
+        );
+        for (id, percent) in &app.model_progress {
+            let name = app
+                .model_statuses
+                .iter()
+                .find(|model| &model.id == id)
+                .map(|model| model.name.as_str())
+                .unwrap_or(id.as_str());
+            downloads = downloads.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .text_size(theme::TEXT_XS)
+                    .text_color(theme::text_muted())
+                    .child(name.to_string())
+                    .child(format!("{percent}%")),
+            );
+        }
+        list = list.child(downloads);
+    }
     for model in &app.model_statuses {
         let id = model.id.clone();
         let progress = app.model_progress.get(&id).copied();
@@ -940,8 +969,12 @@ fn meter(app: &FloureApp) -> AnyElement {
 fn size_label(bytes: u64) -> String {
     if bytes >= 1_000_000_000 {
         format!("{:.1} GB", bytes as f64 / 1_000_000_000.0)
-    } else {
+    } else if bytes >= 1_000_000 {
         format!("{} MB", bytes / 1_000_000)
+    } else if bytes >= 1_000 {
+        format!("{} KB", bytes / 1_000)
+    } else {
+        format!("{bytes} B")
     }
 }
 
@@ -959,6 +992,7 @@ fn language_label(app: &FloureApp) -> String {
 fn asr_label(app: &FloureApp) -> String {
     match app.config.asr_profile {
         AsrProfile::Parakeet => "Parakeet v2".to_string(),
+        AsrProfile::ParakeetUltra => "Parakeet Ultra".to_string(),
         AsrProfile::WhisperTurbo => "Whisper Turbo".to_string(),
         AsrProfile::WhisperBase => "Whisper Base".to_string(),
     }

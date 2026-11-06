@@ -2,7 +2,7 @@
 
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, prelude::*, px};
 
-use crate::app::{Destination, FloureApp, RunState};
+use crate::app::{FloureApp, RunState};
 use crate::hotkeys::HotkeyStatus;
 use crate::theme;
 
@@ -38,7 +38,7 @@ pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                 .cursor_pointer()
                 .hover(|style| style.bg(theme::raised()))
                 .child("Open Configuration → Models")
-                .on_click(cx.listener(|this, _, _, cx| this.go(Destination::Configuration, cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.go_models(cx))),
         );
     }
 
@@ -401,6 +401,7 @@ fn session_strip(app: &FloureApp) -> AnyElement {
 fn asr_label(app: &FloureApp) -> &'static str {
     match app.config.asr_profile {
         floure_core::config::AsrProfile::Parakeet => "Parakeet",
+        floure_core::config::AsrProfile::ParakeetUltra => "Parakeet Ultra",
         floure_core::config::AsrProfile::WhisperTurbo => "Whisper Turbo",
         floure_core::config::AsrProfile::WhisperBase => "Whisper Base",
     }

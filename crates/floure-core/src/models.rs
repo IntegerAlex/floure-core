@@ -12,7 +12,20 @@ pub struct ModelManifest {
     pub recommended: bool,
     pub is_archive: bool,
     pub filename: Option<&'static str>,
+    /// Multi-file releases (Hugging Face repos) fetch each file separately.
+    /// Empty means `url` is the payload.
+    pub files: &'static [ModelFile],
 }
+
+#[derive(Debug, Clone)]
+pub struct ModelFile {
+    pub url: &'static str,
+    /// Name inside the model directory, normalised to what the runtime loads.
+    pub dest: &'static str,
+    pub size_bytes: u64,
+}
+
+const NO_FILES: &[ModelFile] = &[];
 
 pub const MODEL_MANIFEST: &[ModelManifest] = &[
     ModelManifest {
@@ -24,6 +37,7 @@ pub const MODEL_MANIFEST: &[ModelManifest] = &[
         recommended: true,
         is_archive: false,
         filename: Some("silero_vad.onnx"),
+        files: NO_FILES,
     },
     ModelManifest {
         id: "parakeet-tdt-0.6b-v2-int8",
@@ -34,6 +48,39 @@ pub const MODEL_MANIFEST: &[ModelManifest] = &[
         recommended: true,
         is_archive: true,
         filename: None,
+        files: NO_FILES,
+    },
+    ModelManifest {
+        id: "parakeet-ultra-int8",
+        name: "Parakeet Ultra (int8, multilingual)",
+        url: "https://huggingface.co/tpmaerk/parakeet-ultra-sherpa-onnx-int8",
+        size_bytes: 670_576_838,
+        backend: "parakeet",
+        recommended: false,
+        is_archive: false,
+        filename: None,
+        files: &[
+            ModelFile {
+                url: "https://huggingface.co/tpmaerk/parakeet-ultra-sherpa-onnx-int8/resolve/main/encoder.int8.onnx",
+                dest: "encoder.onnx",
+                size_bytes: 652_282_347,
+            },
+            ModelFile {
+                url: "https://huggingface.co/tpmaerk/parakeet-ultra-sherpa-onnx-int8/resolve/main/decoder.int8.onnx",
+                dest: "decoder.onnx",
+                size_bytes: 11_845_275,
+            },
+            ModelFile {
+                url: "https://huggingface.co/tpmaerk/parakeet-ultra-sherpa-onnx-int8/resolve/main/joiner.int8.onnx",
+                dest: "joiner.onnx",
+                size_bytes: 6_355_277,
+            },
+            ModelFile {
+                url: "https://huggingface.co/tpmaerk/parakeet-ultra-sherpa-onnx-int8/resolve/main/tokens.txt",
+                dest: "tokens.txt",
+                size_bytes: 93_939,
+            },
+        ],
     },
     ModelManifest {
         id: "whisper-large-v3-turbo-q5_1",
@@ -44,6 +91,7 @@ pub const MODEL_MANIFEST: &[ModelManifest] = &[
         recommended: false,
         is_archive: true,
         filename: None,
+        files: NO_FILES,
     },
     ModelManifest {
         id: "whisper-base-q5_1",
@@ -54,6 +102,7 @@ pub const MODEL_MANIFEST: &[ModelManifest] = &[
         recommended: false,
         is_archive: true,
         filename: None,
+        files: NO_FILES,
     },
     ModelManifest {
         id: "s1-mini-q4_k_m",
@@ -64,6 +113,7 @@ pub const MODEL_MANIFEST: &[ModelManifest] = &[
         recommended: true,
         is_archive: false,
         filename: Some("s1-mini-q4_k_m.gguf"),
+        files: NO_FILES,
     },
     ModelManifest {
         id: "gemma-3-1b-it-q4_k_m",
@@ -74,6 +124,7 @@ pub const MODEL_MANIFEST: &[ModelManifest] = &[
         recommended: false,
         is_archive: false,
         filename: Some("gemma-3-1b-it-q4_k_m.gguf"),
+        files: NO_FILES,
     },
 ];
 
@@ -366,6 +417,94 @@ fn normalize_extracted(backend: &str, model_dir: &Path) -> Result<()> {
 }
 
 pub fn download_model(
+    model: &ModelManifest,
+    target_dir: &Path,
+    progress: impl FnMut(usize, u64),
+) -> Result<()> {
+    if !model.files.is_empty() {
+        return download_files(model, target_dir, progress);
+    }
+    download_single(model, target_dir, progress)
+}
+
+/// Fetch a multi-file release (Hugging Face) into the runtime's flat layout.
+/// Each file resumes independently; progress is combined by bytes.
+fn download_files(
+    model: &ModelManifest,
+    target_dir: &Path,
+    mut progress: impl FnMut(usize, u64),
+) -> Result<()> {
+    if target_dir.join(".downloaded").exists()
+        && verify_model(target_dir.parent().unwrap_or(target_dir), model)
+    {
+        eprintln!("[models] {} already downloaded, skipping", model.id);
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(target_dir.join(".downloaded"));
+
+    {
+        let mut active = active_downloads().lock().unwrap();
+        if !active.insert(target_dir.to_path_buf()) {
+            return Err(anyhow::anyhow!("{} download already in progress", model.id));
+        }
+    }
+    let _download_guard = DownloadGuard {
+        key: target_dir.to_path_buf(),
+    };
+
+    std::fs::create_dir_all(target_dir)?;
+    let total: u64 = model.files.iter().map(|file| file.size_bytes).sum();
+    let mut completed: u64 = 0;
+    for file in model.files {
+        let dest = target_dir.join(file.dest);
+        let mut offset = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        if offset > file.size_bytes {
+            let _ = std::fs::remove_file(&dest);
+            offset = 0;
+        }
+        if offset == file.size_bytes && file.size_bytes > 0 {
+            completed += offset;
+            continue;
+        }
+        let mut request = reqwest::blocking::Client::new().get(file.url);
+        if offset > 0 {
+            request = request.header("Range", format!("bytes={offset}-"));
+        }
+        let response = request.send()?.error_for_status()?;
+        let previous = completed;
+        let mut sent = 0u64;
+        stream_to_file(
+            response,
+            &dest,
+            file.size_bytes,
+            offset,
+            &mut |percent, bytes| {
+                let _ = percent;
+                sent = bytes;
+                let done = previous + bytes;
+                let overall = if total > 0 {
+                    (done as f64 / total as f64 * 100.0) as usize
+                } else {
+                    100
+                };
+                progress(overall, done);
+            },
+        )?;
+        completed = previous + sent;
+    }
+
+    if !verify_model(target_dir.parent().unwrap_or(target_dir), model) {
+        return Err(anyhow::anyhow!(
+            "{} files missing after download in {}",
+            model.id,
+            target_dir.display()
+        ));
+    }
+    std::fs::write(target_dir.join(".downloaded"), b"")?;
+    Ok(())
+}
+
+fn download_single(
     model: &ModelManifest,
     target_dir: &Path,
     mut progress: impl FnMut(usize, u64),
@@ -678,5 +817,24 @@ mod delete_tests {
         );
         let _ = std::fs::remove_dir_all(&escape);
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    #[test]
+    fn ultra_is_a_complete_multifile_parakeet_bundle() {
+        let ultra = find_model("parakeet-ultra-int8").expect("ultra manifest");
+        assert_eq!(ultra.backend, "parakeet");
+        assert_eq!(ultra.files.len(), 4);
+        let names: Vec<_> = ultra.files.iter().map(|file| file.dest).collect();
+        assert_eq!(
+            names,
+            vec!["encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"]
+        );
+        let total: u64 = ultra.files.iter().map(|file| file.size_bytes).sum();
+        assert_eq!(total, ultra.size_bytes);
     }
 }
