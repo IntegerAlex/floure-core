@@ -497,11 +497,9 @@ fn dictionary(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
 }
 
 fn cleanup(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
-    let provider = match app.config.llm_provider {
-        LlmProvider::Local => "Local",
-        LlmProvider::OpenRouter => "OpenRouter",
-    };
-    div()
+    let local = matches!(app.config.llm_provider, LlmProvider::Local);
+    let provider = if local { "Local" } else { "OpenRouter" };
+    let mut list = div()
         .flex()
         .flex_col()
         .child(setting(
@@ -519,66 +517,162 @@ fn cleanup(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         ))
         .child(setting(
             "Provider",
-            Some("OpenRouter sends text off this machine"),
+            Some(if local {
+                "Cleanup stays on this machine"
+            } else {
+                "OpenRouter sends the transcript off this machine"
+            }),
             button(
                 "llm-provider",
                 provider,
                 false,
-                cx.listener(|this, _, _, cx| {
-                    this.toggle_provider();
+                cx.listener(|this, _, window, cx| {
+                    this.toggle_provider(window, cx);
                     cx.notify();
                 }),
             ),
-        ))
-        .child(stacked(
-            "Model",
-            Some("Staged until Apply"),
+        ));
+
+    if local {
+        list = list.child(
             div()
+                .py(theme::SPACE_3)
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(theme::SPACE_2)
-                .w_full()
+                .justify_between()
+                .border_b_1()
+                .border_color(theme::border())
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(input_box(&app.llm_model_input)),
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(theme::TEXT_BASE)
+                                .text_color(theme::text())
+                                .child("Local cleanup model"),
+                        )
+                        .child(
+                            div()
+                                .text_size(theme::TEXT_XS)
+                                .text_color(theme::text_muted())
+                                .child(
+                                    "Downloaded models can be swapped without leaving this page",
+                                ),
+                        ),
                 )
                 .child(button(
-                    "set-llm-model",
-                    "Use",
+                    "manage-cleanup-models",
+                    "Manage models",
                     false,
-                    cx.listener(|this, _, _, cx| {
-                        this.config.llm_model = this.llm_model_input.read(cx).value().to_string();
-                        this.config_dirty = true;
+                    cx.listener(|this, _, _, cx| this.go_models(cx)),
+                )),
+        );
+
+        for model in app
+            .model_statuses
+            .iter()
+            .filter(|model| model.backend == "llm")
+        {
+            let id = model.id.clone();
+            let selected = app.config.llm_model == model.id
+                || (app.config.llm_model.trim().is_empty() && model.id == "s1-mini-q4_k_m");
+            let progress = app.model_progress.get(&id).copied();
+            let control: AnyElement = if let Some(percent) = progress {
+                div()
+                    .text_size(theme::TEXT_XS)
+                    .text_color(theme::text_secondary())
+                    .child(format!("{percent}%"))
+                    .into_any_element()
+            } else if !model.downloaded {
+                let id = id.clone();
+                button(
+                    "download-cleanup-model",
+                    "Download",
+                    false,
+                    cx.listener(move |this, _, _, cx| {
+                        this.download_model(&id, cx);
+                    }),
+                )
+            } else {
+                let id = id.clone();
+                button(
+                    "use-cleanup-model",
+                    if selected { "Selected" } else { "Use" },
+                    false,
+                    cx.listener(move |this, _, _, cx| {
+                        this.select_local_llm(&id);
                         cx.notify();
                     }),
-                )),
-        ))
-        .child(stacked(
-            "OpenRouter key",
-            Some("Kept for this session only"),
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme::SPACE_2)
-                .w_full()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(input_box(&app.api_key_input)),
                 )
-                .child(button(
-                    "save-api-key",
-                    "Save",
-                    false,
-                    cx.listener(|this, _, _, cx| this.save_openrouter_key(cx)),
-                )),
-        ))
-        .into_any_element()
+            };
+            let hint = if selected && model.downloaded {
+                "Selected".to_string()
+            } else if selected {
+                "Selected · download required".to_string()
+            } else if model.downloaded {
+                format!("{} · downloaded", size_label(model.size_bytes))
+            } else {
+                format!("{} · not downloaded", size_label(model.size_bytes))
+            };
+            list = list.child(setting(&model.name, Some(&hint), control));
+        }
+    } else {
+        list = list
+            .child(stacked(
+                "OpenRouter model",
+                Some("Staged until Apply"),
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme::SPACE_2)
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(input_box(&app.llm_model_input)),
+                    )
+                    .child(button(
+                        "set-llm-model",
+                        "Use",
+                        false,
+                        cx.listener(|this, _, _, cx| {
+                            this.config.llm_model =
+                                this.llm_model_input.read(cx).value().to_string();
+                            this.config_dirty = true;
+                            cx.notify();
+                        }),
+                    )),
+            ))
+            .child(stacked(
+                "OpenRouter key",
+                Some("Kept for this session only"),
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme::SPACE_2)
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(input_box(&app.api_key_input)),
+                    )
+                    .child(button(
+                        "save-api-key",
+                        "Save",
+                        false,
+                        cx.listener(|this, _, _, cx| this.save_openrouter_key(cx)),
+                    )),
+            ));
+    }
+
+    list.into_any_element()
 }
 
 fn output(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {

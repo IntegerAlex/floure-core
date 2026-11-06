@@ -235,8 +235,11 @@ impl FloureApp {
             cx.new(|cx| InputState::new(window, cx).placeholder("Replace with"));
         let api_key_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("OpenRouter API key"));
-        let llm_model_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("openai/gpt-4o-mini"));
+        let llm_model_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("openai/gpt-4o-mini")
+                .default_value(config.llm_model.clone())
+        });
         let hotwords_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Names, jargon, acronyms"));
         let mic_devices = floure_core::audio::list_input_devices().unwrap_or_default();
@@ -781,11 +784,32 @@ impl FloureApp {
         self.config_dirty = true;
     }
 
-    pub fn toggle_provider(&mut self) {
-        self.config.llm_provider = match self.config.llm_provider {
-            LlmProvider::Local => LlmProvider::OpenRouter,
-            LlmProvider::OpenRouter => LlmProvider::Local,
+    pub fn toggle_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let going_cloud = matches!(self.config.llm_provider, LlmProvider::Local);
+        self.config.llm_provider = if going_cloud {
+            LlmProvider::OpenRouter
+        } else {
+            LlmProvider::Local
         };
+        // The two providers use different ids. Never carry a local id into an
+        // OpenRouter request (or the reverse) after a provider switch.
+        if going_cloud && !self.config.llm_model.contains('/') {
+            self.config.llm_model = "openai/gpt-4o-mini".to_string();
+        } else if !going_cloud
+            && (self.config.llm_model.contains('/') || self.config.llm_model.trim().is_empty())
+        {
+            self.config.llm_model = "s1-mini-q4_k_m".to_string();
+        }
+        if going_cloud {
+            let value = self.config.llm_model.clone();
+            self.llm_model_input
+                .update(cx, |state, cx| state.set_value(value, window, cx));
+        }
+        self.config_dirty = true;
+    }
+
+    pub fn select_local_llm(&mut self, id: &str) {
+        self.config.llm_model = id.to_string();
         self.config_dirty = true;
     }
 
