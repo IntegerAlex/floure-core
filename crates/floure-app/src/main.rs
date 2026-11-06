@@ -127,6 +127,16 @@ fn apply_component_theme(cx: &mut App) {
 /// `--toggle` never opens a second window or engine.
 fn handle_cli() -> bool {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--diagnostics") {
+        match floure_core::diagnostics::get_diagnostics() {
+            Ok(json) => println!("{json}"),
+            Err(error) => {
+                eprintln!("floure: {error}");
+                std::process::exit(1);
+            }
+        }
+        return true;
+    }
     let (method, path) = match args.first().map(String::as_str) {
         Some("--toggle") => ("POST", "/toggle"),
         Some("--start") => ("POST", "/start"),

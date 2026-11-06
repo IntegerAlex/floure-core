@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Floure
+GenericName=Dictation
+Comment=Local-first dictation: speak, clean up, and type where the cursor is
+Exec=floure
+Icon=floure
+Terminal=false
+Categories=Utility;
+Keywords=dictation;speech;transcription;voice;stt;microphone;
+StartupWMClass=floure
+X-GNOME-UsesNotifications=true
