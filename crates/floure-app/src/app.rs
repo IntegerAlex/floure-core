@@ -836,6 +836,11 @@ impl FloureApp {
     }
 
     pub fn delete_model(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.recording {
+            self.config_error = Some("Stop recording before deleting a model.".to_string());
+            cx.notify();
+            return;
+        }
         match floure_core::models::delete_model(&self.config.model_dir, id) {
             Ok(()) => {
                 self.refresh_models();
