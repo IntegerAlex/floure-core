@@ -330,14 +330,18 @@ fn models(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             )
         };
         let hint = format!(
-            "{}{} · {}",
+            "{}{}{}",
             model.backend,
             if model.recommended {
                 " · Recommended"
             } else {
                 ""
             },
-            size_label(model.size_bytes)
+            if model.size_bytes > 0 {
+                format!(" · {}", size_label(model.size_bytes))
+            } else {
+                String::new()
+            }
         );
         list = list.child(setting(&model.name, Some(&hint), control));
     }
@@ -440,17 +444,23 @@ fn dictionary(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                     .flex_row()
                     .items_center()
                     .gap(theme::SPACE_2)
-                    .child(icon_button(
+                    .child(text_action(
                         SharedString::from(format!("dict-fav-{id}")),
-                        if entry.is_favorite { "★" } else { "☆" },
+                        if entry.is_favorite { "Starred" } else { "Star" },
+                        if entry.is_favorite {
+                            theme::text()
+                        } else {
+                            theme::text_faint()
+                        },
                         cx.listener(move |this, _, _, cx| {
                             this.toggle_dictionary_favorite(id);
                             cx.notify();
                         }),
                     ))
-                    .child(icon_button(
+                    .child(text_action(
                         SharedString::from(format!("dict-delete-{id}")),
-                        "×",
+                        "Remove",
+                        theme::text_faint(),
                         cx.listener(move |this, _, _, cx| {
                             this.delete_dictionary_entry(id);
                             cx.notify();
@@ -890,26 +900,25 @@ fn code_with_copy(text: &'static str, cx: &mut Context<FloureApp>) -> AnyElement
         .into_any_element()
 }
 
-fn icon_button(
+fn text_action(
     id: SharedString,
-    glyph: &'static str,
+    label: &'static str,
+    color: gpui::Rgba,
     listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
     div()
         .id(id)
         .role(gpui::Role::Button)
-        .aria_label(glyph)
-        .size(px(24.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(6.0))
-        .text_size(theme::TEXT_SM)
-        .text_color(theme::text_faint())
+        .aria_label(label)
+        .px(px(6.0))
+        .py(px(2.0))
+        .rounded(px(5.0))
+        .text_size(theme::TEXT_XS)
+        .text_color(color)
         .cursor_pointer()
-        .hover(|style| style.bg(theme::raised()))
+        .hover(|style| style.bg(theme::raised()).text_color(theme::text()))
         .on_click(listener)
-        .child(glyph)
+        .child(label)
         .into_any_element()
 }
 

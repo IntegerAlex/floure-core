@@ -64,6 +64,7 @@ fn figures(insights: &Insights) -> AnyElement {
                     div()
                         .text_size(theme::TEXT_2XL)
                         .font_weight(theme::semibold())
+                        .font_features(theme::tabular())
                         .child(value),
                 ),
         );

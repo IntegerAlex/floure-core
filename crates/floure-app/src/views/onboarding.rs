@@ -33,15 +33,20 @@ pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                         .text_size(theme::TEXT_SM)
                         .text_color(theme::text_faint())
                         .child(format!("Step {} of 3", app.onboarding_step + 1)),
-                ),
+                )
+                .child(progress(app.onboarding_step)),
         )
-        .child(div().flex().flex_col().flex_1().mt(theme::SPACE_6).child(
-            match app.onboarding_step {
-                0 => microphone(app, cx),
-                1 => models(app, cx),
-                _ => ready(app, cx),
-            },
-        ))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .mt(theme::SPACE_6)
+                .child(match app.onboarding_step {
+                    0 => microphone(app, cx),
+                    1 => models(app, cx),
+                    _ => ready(app, cx),
+                }),
+        )
         .child(navigation(app, cx))
         .into_any_element()
 }
@@ -196,12 +201,32 @@ fn ready(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
     list.into_any_element()
 }
 
+fn progress(step: usize) -> AnyElement {
+    let mut row = div().flex().flex_row().gap(px(6.0)).mt(theme::SPACE_3);
+    for index in 0..3 {
+        row = row.child(
+            div()
+                .w(px(36.0))
+                .h(px(3.0))
+                .rounded(px(2.0))
+                .bg(if index <= step {
+                    theme::text()
+                } else {
+                    theme::raised()
+                }),
+        );
+    }
+    row.into_any_element()
+}
+
 fn navigation(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
     let mut row = div()
         .flex()
         .flex_row()
         .items_center()
         .justify_between()
+        .w_full()
+        .max_w(px(560.0))
         .mt(theme::SPACE_6);
     row = row.child(if app.onboarding_step > 0 {
         button(
@@ -213,9 +238,11 @@ fn navigation(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         div().into_any_element()
     });
     if app.onboarding_step < 2 {
-        row = row.child(button(
+        let can_continue = app.onboarding_step != 1 || app.models_ready();
+        row = row.child(button_enabled(
             "onboarding-next",
             "Continue",
+            can_continue,
             cx.listener(|this, _, _, cx| this.onboarding_next(cx)),
         ));
     }
@@ -290,6 +317,36 @@ fn row(label: &str, value: String) -> AnyElement {
                 .child(value),
         )
         .into_any_element()
+}
+
+fn button_enabled(
+    id: &'static str,
+    label: &str,
+    enabled: bool,
+    listener: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> AnyElement {
+    let mut button = div()
+        .id(SharedString::from(id))
+        .role(gpui::Role::Button)
+        .aria_label(label.to_string())
+        .px(theme::SPACE_3)
+        .h(px(30.0))
+        .flex()
+        .items_center()
+        .rounded(theme::RADIUS_CONTROL)
+        .border_1()
+        .border_color(theme::border())
+        .bg(theme::surface())
+        .text_size(theme::TEXT_SM)
+        .text_color(if enabled {
+            theme::text_secondary()
+        } else {
+            theme::text_faint()
+        });
+    if enabled {
+        button = button.cursor_pointer().on_click(listener);
+    }
+    button.child(label.to_string()).into_any_element()
 }
 
 fn button(

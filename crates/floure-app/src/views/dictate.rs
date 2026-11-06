@@ -54,6 +54,8 @@ pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                 .flex()
                 .flex_col()
                 .flex_1()
+                .min_h(px(220.0))
+                .max_h(px(460.0))
                 .items_center()
                 .justify_center()
                 .gap(theme::SPACE_4)
@@ -62,7 +64,6 @@ pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                 .child(waveform(app)),
         )
         .child(transcript_panel(app, cx))
-        .child(session_strip(app))
         .into_any_element()
 }
 
@@ -97,7 +98,15 @@ fn mic_button(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                 theme::surface()
             })
         })
-        .child(big_mic(glyph))
+        .child(if app.recording {
+            div()
+                .size(px(20.0))
+                .rounded(px(5.0))
+                .bg(glyph)
+                .into_any_element()
+        } else {
+            big_mic(glyph)
+        })
         .on_click(cx.listener(|this, _, _, cx| this.toggle_recording(cx)))
         .into_any_element()
 }
@@ -140,8 +149,8 @@ pub fn shortcut_display(status: &HotkeyStatus, hotkey: &str) -> (String, Option<
             )),
         ),
         HotkeyStatus::Unavailable => (
-            "No global shortcut on Wayland".to_string(),
-            Some("Bind `floure --toggle` in your compositor".to_string()),
+            "Wayland needs a compositor shortcut".to_string(),
+            Some("Add `floure --toggle` to your compositor keybindings".to_string()),
         ),
     }
 }
@@ -331,6 +340,7 @@ fn transcript_panel(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement 
             );
     }
 
+    panel = panel.child(session_strip(app));
     panel.into_any_element()
 }
 
@@ -363,10 +373,12 @@ fn session_strip(app: &FloureApp) -> AnyElement {
         .items_center()
         .justify_between()
         .w_full()
-        .max_w(px(640.0))
-        .mx_auto()
         .mt(theme::SPACE_4)
+        .pt(theme::SPACE_3)
+        .border_t_1()
+        .border_color(theme::border())
         .text_size(theme::TEXT_XS)
+        .font_features(theme::tabular())
         .text_color(theme::text_faint())
         .child(format!(
             "{} words   {} WPM   {}",
@@ -394,7 +406,7 @@ mod tests {
     fn every_wayland_fallback_is_visible_not_silent() {
         let (text, hint) =
             shortcut_display(&HotkeyStatus::Unavailable, "CommandOrControl+Shift+F12");
-        assert_eq!(text, "No global shortcut on Wayland");
+        assert_eq!(text, "Wayland needs a compositor shortcut");
         assert!(hint.is_some_and(|hint| hint.contains("floure --toggle")));
 
         let (text, hint) = shortcut_display(&HotkeyStatus::Failed("in use".into()), "Alt+Space");

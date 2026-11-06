@@ -209,12 +209,58 @@ fn rows(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         return message(error, theme::error());
     }
     if app.history.is_empty() {
-        let text = if app.history_query.trim().is_empty() {
-            "No transcripts yet. Your first dictation will appear here."
-        } else {
-            "No transcripts match that search."
-        };
-        return message(text, theme::text_muted());
+        if app.history_query.trim().is_empty() {
+            return div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(theme::SPACE_2)
+                .py(theme::SPACE_12)
+                .child(
+                    div()
+                        .text_size(theme::TEXT_BASE)
+                        .text_color(theme::text_muted())
+                        .child("No transcripts yet"),
+                )
+                .child(
+                    div()
+                        .text_size(theme::TEXT_SM)
+                        .text_color(theme::text_faint())
+                        .child("Start from your shortcut, the tray, or `floure --toggle`."),
+                )
+                .into_any_element();
+        }
+        return div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(theme::SPACE_3)
+            .py(theme::SPACE_12)
+            .child(
+                div()
+                    .text_size(theme::TEXT_BASE)
+                    .text_color(theme::text_muted())
+                    .child(format!(
+                        "No transcripts match “{}”",
+                        app.history_query.trim()
+                    )),
+            )
+            .child(button(
+                "clear-search",
+                "Clear search",
+                false,
+                cx.listener(|this, _, window, cx| {
+                    this.search_input
+                        .update(cx, |state, cx| state.set_value("", window, cx));
+                    this.history_query.clear();
+                    this.history_limit = 50;
+                    this.refresh_history();
+                    cx.notify();
+                }),
+            ))
+            .into_any_element();
     }
 
     let (today, yesterday) =
@@ -306,9 +352,10 @@ fn row_view(
         ))
         .child(
             div()
-                .w(px(44.0))
+                .w(px(48.0))
                 .flex_shrink_0()
                 .text_size(theme::TEXT_XS)
+                .font_features(theme::tabular())
                 .text_color(theme::text_faint())
                 .child(time),
         )
@@ -318,13 +365,13 @@ fn row_view(
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(theme::SPACE_2)
+                .gap(theme::SPACE_3)
                 .flex_shrink_0()
-                .child(icon_button(
+                .child(text_action(
                     SharedString::from(format!("favorite-{id}")),
-                    if favorite { "★" } else { "☆" },
+                    if favorite { "Starred" } else { "Star" },
                     if favorite {
-                        theme::accent()
+                        theme::text()
                     } else {
                         theme::text_faint()
                     },
@@ -333,9 +380,9 @@ fn row_view(
                         cx.notify();
                     }),
                 ))
-                .child(icon_button(
+                .child(text_action(
                     SharedString::from(format!("copy-{id}")),
-                    "⧉",
+                    "Copy",
                     theme::text_faint(),
                     cx.listener(move |this, _, _, cx| {
                         this.copy_row(&text);
@@ -343,9 +390,9 @@ fn row_view(
                     }),
                 ))
                 .when(can_expand, |this| {
-                    this.child(icon_button(
+                    this.child(text_action(
                         SharedString::from(format!("expand-{id}")),
-                        if expanded { "⌃" } else { "⌄" },
+                        if expanded { "Clean" } else { "Raw" },
                         theme::text_faint(),
                         cx.listener(move |this, _, _, cx| {
                             this.toggle_expanded(id);
@@ -353,9 +400,9 @@ fn row_view(
                         }),
                     ))
                 })
-                .child(icon_button(
+                .child(text_action(
                     SharedString::from(format!("delete-{id}")),
-                    "×",
+                    "Delete",
                     theme::text_faint(),
                     cx.listener(move |this, _, _, cx| {
                         this.delete_history_row(id);
@@ -472,27 +519,25 @@ fn checkbox(
         .into_any_element()
 }
 
-fn icon_button(
+fn text_action(
     id: SharedString,
-    glyph: &'static str,
+    label: &'static str,
     color: gpui::Rgba,
     listener: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
     div()
         .id(id)
         .role(gpui::Role::Button)
-        .aria_label(glyph)
-        .size(px(24.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(6.0))
-        .text_size(theme::TEXT_SM)
+        .aria_label(label)
+        .px(px(6.0))
+        .py(px(2.0))
+        .rounded(px(5.0))
+        .text_size(theme::TEXT_XS)
         .text_color(color)
         .cursor_pointer()
-        .hover(|style| style.bg(theme::raised()))
+        .hover(|style| style.bg(theme::raised()).text_color(theme::text()))
         .on_click(listener)
-        .child(glyph)
+        .child(label)
         .into_any_element()
 }
 

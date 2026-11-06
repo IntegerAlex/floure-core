@@ -96,6 +96,11 @@ pub fn semibold() -> FontWeight {
     FontWeight::SEMIBOLD
 }
 
+/// Tabular numerals for every metric, so values do not jitter as they change.
+pub fn tabular() -> gpui::FontFeatures {
+    gpui::FontFeatures(std::sync::Arc::new(vec![("tnum".to_string(), 1)]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

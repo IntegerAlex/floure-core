@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 
 use gpui::{
-    AnyElement, Context, Entity, FocusHandle, IntoElement, KeyBinding, MouseButton, ParentElement,
-    Render, SharedString, Styled, Window, actions, div, prelude::*, px,
+    AnyElement, Context, Entity, FocusHandle, Focusable, IntoElement, KeyBinding, MouseButton,
+    ParentElement, Render, SharedString, Styled, Window, actions, div, prelude::*, px,
 };
 use gpui_component::input::InputState;
 
@@ -23,7 +23,10 @@ use crate::hotkeys::HotkeyStatus;
 use crate::theme;
 use crate::views;
 
-actions!(floure, [GoDictate, GoHistory, GoStats, GoConfig, Quit]);
+actions!(
+    floure,
+    [GoDictate, GoHistory, GoStats, GoConfig, FocusSearch, Quit]
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Destination {
@@ -1026,6 +1029,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-2", GoHistory, None),
         KeyBinding::new("ctrl-3", GoStats, None),
         KeyBinding::new("ctrl-4", GoConfig, None),
+        KeyBinding::new("ctrl-f", FocusSearch, None),
         KeyBinding::new("ctrl-q", Quit, None),
     ]
 }
@@ -1047,6 +1051,13 @@ impl Render for FloureApp {
             .on_action(
                 cx.listener(|this, _: &GoConfig, _, cx| this.go(Destination::Configuration, cx)),
             )
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
+                this.destination = Destination::History;
+                this.refresh_history();
+                let handle = this.search_input.read(cx).focus_handle(cx);
+                window.focus(&handle, cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(Self::on_quit))
             .size_full()
             .flex()
