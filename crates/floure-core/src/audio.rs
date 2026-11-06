@@ -97,7 +97,23 @@ pub fn list_input_devices() -> Result<Vec<(String, String)>> {
     let mut devices = Vec::new();
 
     for device in host.input_devices()? {
+        // Some backends list playback-only PCMs through `input_devices`; a
+        // device that cannot open an input config is not a microphone.
+        if device.default_input_config().is_err() {
+            continue;
+        }
         let name = device.to_string();
+        let lower = name.to_lowercase();
+        // ALSA exposes pseudo-PCMs and playback nodes through the input list;
+        // neither is a microphone.
+        if lower.contains("(playback)") || lower.starts_with("default alsa output") {
+            continue;
+        }
+        // The same physical device appears once per ALSA plugin. One row is
+        // enough, and the first name-based match keeps the stable id.
+        if devices.iter().any(|(existing, _)| existing == &name) {
+            continue;
+        }
         let id = device.id().map(|d| format!("{:?}", d)).unwrap_or_default();
         devices.push((name, id));
     }

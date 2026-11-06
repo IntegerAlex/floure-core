@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, IntoElement, KeyBinding, MouseButton, ParentElement,
@@ -10,10 +10,13 @@ use gpui::{
 };
 use gpui_component::input::InputState;
 
-use floure_core::config::AppConfig;
+use floure_core::config::{AppConfig, AsrProfile, LlmProvider, PttMode, SettingsUpdate};
+use floure_core::llm::LlmMode;
+use floure_core::models::{ModelManager, ModelStatus};
 use floure_core::output::copy_to_clipboard;
 use floure_core::{
-    Engine, EngineEvent, EngineState, History, Insights, InsightsRepo, TranscriptRow,
+    Dictionary, DictionaryEntry, Engine, EngineEvent, EngineState, History, Insights, InsightsRepo,
+    TranscriptRow,
 };
 
 use crate::hotkeys::HotkeyStatus;
@@ -175,6 +178,22 @@ pub struct FloureApp {
     pub search_input: Entity<InputState>,
     pub insights: Option<Insights>,
     pub history_error: Option<String>,
+    pub config_section: usize,
+    pub config_dirty: bool,
+    pub config_error: Option<String>,
+    pub config_notice: Option<String>,
+    pub model_statuses: Vec<ModelStatus>,
+    pub model_progress: HashMap<String, u8>,
+    pub dictionary_entries: Vec<DictionaryEntry>,
+    pub dictionary_phrase: Entity<InputState>,
+    pub dictionary_replacement: Entity<InputState>,
+    pub api_key_input: Entity<InputState>,
+    pub llm_model_input: Entity<InputState>,
+    pub hotwords_input: Entity<InputState>,
+    pub mic_devices: Vec<(String, String)>,
+    pub helper_binaries: Vec<(&'static str, bool)>,
+    pub mic_testing: bool,
+    pub onboarding_step: usize,
     activate_next_frame: bool,
     focus_handle: FocusHandle,
 }
@@ -200,6 +219,31 @@ impl FloureApp {
         window.focus(&focus_handle, cx);
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search transcripts"));
+        let dictionary_phrase =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Heard phrase"));
+        let dictionary_replacement =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Replace with"));
+        let api_key_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("OpenRouter API key"));
+        let llm_model_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("openai/gpt-4o-mini"));
+        let hotwords_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Names, jargon, acronyms"));
+        let mic_devices = floure_core::audio::list_input_devices().unwrap_or_default();
+        let helper_binaries = ["wtype", "xdotool", "wl-copy", "ydotool"]
+            .into_iter()
+            .map(|name| {
+                let found = std::process::Command::new("sh")
+                    .args(["-c", &format!("command -v {name}")])
+                    .output()
+                    .is_ok_and(|out| out.status.success());
+                (name, found)
+            })
+            .collect();
+        let model_statuses = ModelManager::new(config.model_dir.clone()).status();
+        let dictionary_entries = Dictionary::new(floure_core::config::history_db_path())
+            .list(None, None, false)
+            .unwrap_or_default();
 
         let warming = engine.as_ref().is_some_and(|engine| engine.is_warming());
         Self {
@@ -229,6 +273,22 @@ impl FloureApp {
             history_confirm_delete: None,
             history_notice: None,
             search_input,
+            config_section: 0,
+            config_dirty: false,
+            config_error: None,
+            config_notice: None,
+            model_statuses,
+            model_progress: HashMap::new(),
+            dictionary_entries,
+            dictionary_phrase,
+            dictionary_replacement,
+            api_key_input,
+            llm_model_input,
+            hotwords_input,
+            mic_devices,
+            helper_binaries,
+            mic_testing: false,
+            onboarding_step: 0,
             insights,
             history_error,
             activate_next_frame: false,
@@ -390,11 +450,6 @@ impl FloureApp {
                 self.recording = false;
                 self.engine_error = Some(message);
             }
-            EngineEvent::AsrReady { .. } => {
-                if self.status == RunState::Warming {
-                    self.status = RunState::Idle;
-                }
-            }
             EngineEvent::Stopped { .. } => {
                 self.status = RunState::Idle;
                 self.recording = false;
@@ -407,9 +462,23 @@ impl FloureApp {
                 self.status = RunState::Idle;
                 self.recording = false;
             }
-            EngineEvent::ModelProgress { .. }
-            | EngineEvent::ModelDone { .. }
-            | EngineEvent::ModelFailed { .. } => {}
+            EngineEvent::ModelProgress { id, percent, .. } => {
+                self.model_progress.insert(id, percent);
+            }
+            EngineEvent::ModelDone { id } => {
+                self.model_progress.remove(&id);
+                self.refresh_models();
+            }
+            EngineEvent::ModelFailed { id, message } => {
+                self.model_progress.remove(&id);
+                self.config_error = Some(format!("{id}: {message}"));
+                self.refresh_models();
+            }
+            EngineEvent::AsrReady { .. } => {
+                if self.status == RunState::Warming {
+                    self.status = RunState::Idle;
+                }
+            }
         }
     }
 
@@ -567,6 +636,271 @@ impl FloureApp {
         }
     }
 
+    pub fn set_config_section(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.config_section != index {
+            self.config_section = index;
+            self.config_error = None;
+            self.config_notice = None;
+            cx.notify();
+        }
+    }
+
+    fn refresh_models(&mut self) {
+        self.model_statuses = ModelManager::new(self.config.model_dir.clone()).status();
+    }
+
+    pub fn refresh_dictionary(&mut self) {
+        self.dictionary_entries = Dictionary::new(floure_core::config::history_db_path())
+            .list(None, None, false)
+            .unwrap_or_default();
+    }
+
+    pub fn save_config_now(&mut self) {
+        match self.config.save() {
+            Ok(()) => {
+                self.config_error = None;
+                self.config_notice = Some("Saved".to_string());
+            }
+            Err(error) => self.config_error = Some(error.to_string()),
+        }
+    }
+
+    /// Engine-affecting rows stage; this is the one explicit apply.
+    pub fn apply_config(&mut self, cx: &mut Context<Self>) {
+        if self.recording {
+            self.config_error = Some("Stop recording before applying settings.".to_string());
+            cx.notify();
+            return;
+        }
+        let update = SettingsUpdate {
+            asr_profile: self.config.asr_profile.clone(),
+            language: self.config.language.clone(),
+            llm_provider: self.config.llm_provider.clone(),
+            llm_mode: self.config.llm_mode,
+            llm_model: self.config.llm_model.clone(),
+            typing_enabled: self.config.typing_enabled,
+            clipboard_enabled: self.config.clipboard_enabled,
+            hotwords: self.config.hotwords.clone(),
+        };
+        if let Some(engine) = &self.engine {
+            engine.apply_settings(update);
+        }
+        self.config_dirty = false;
+        self.save_config_now();
+        if let Some(engine) = &self.engine {
+            engine.warm();
+        }
+        cx.notify();
+    }
+
+    pub fn cycle_language(&mut self) {
+        const LANGS: [&str; 5] = ["en", "de", "es", "fr", "auto"];
+        let index = LANGS
+            .iter()
+            .position(|lang| *lang == self.config.language)
+            .unwrap_or(0);
+        self.config.language = LANGS[(index + 1) % LANGS.len()].to_string();
+        self.config_dirty = true;
+    }
+
+    pub fn cycle_profile(&mut self) {
+        self.config.asr_profile = match self.config.asr_profile {
+            AsrProfile::Parakeet => AsrProfile::WhisperTurbo,
+            AsrProfile::WhisperTurbo => AsrProfile::WhisperBase,
+            AsrProfile::WhisperBase => AsrProfile::Parakeet,
+        };
+        self.config_dirty = true;
+    }
+
+    pub fn cycle_llm_mode(&mut self) {
+        self.config.llm_mode = match self.config.llm_mode {
+            LlmMode::Off => LlmMode::Cleanup,
+            LlmMode::Cleanup => LlmMode::BulletList,
+            LlmMode::BulletList => LlmMode::Email,
+            LlmMode::Email => LlmMode::CommitMessage,
+            LlmMode::CommitMessage => LlmMode::Off,
+        };
+        self.config_dirty = true;
+    }
+
+    pub fn toggle_provider(&mut self) {
+        self.config.llm_provider = match self.config.llm_provider {
+            LlmProvider::Local => LlmProvider::OpenRouter,
+            LlmProvider::OpenRouter => LlmProvider::Local,
+        };
+        self.config_dirty = true;
+    }
+
+    pub fn toggle_ptt_mode(&mut self) {
+        self.config.ptt_mode = match self.config.ptt_mode {
+            PttMode::Hold => PttMode::Toggle,
+            PttMode::Toggle => PttMode::Hold,
+        };
+        self.save_config_now();
+    }
+
+    pub fn toggle_typing(&mut self) {
+        self.config.typing_enabled = !self.config.typing_enabled;
+        self.save_config_now();
+    }
+
+    pub fn toggle_clipboard(&mut self) {
+        self.config.clipboard_enabled = !self.config.clipboard_enabled;
+        self.save_config_now();
+    }
+
+    pub fn set_mic(&mut self, device: String) {
+        self.config.selected_mic_id = if device.is_empty() {
+            None
+        } else {
+            Some(device)
+        };
+        self.save_config_now();
+    }
+
+    pub fn toggle_mic_test(&mut self, cx: &mut Context<Self>) {
+        self.mic_testing = !self.mic_testing;
+        if let Some(engine) = &self.engine {
+            if self.mic_testing {
+                if let Err(error) = engine.start_mic_test() {
+                    self.mic_testing = false;
+                    self.config_error = Some(error.to_string());
+                }
+            } else {
+                engine.stop_mic_test();
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn download_model(&mut self, id: &str, cx: &mut Context<Self>) {
+        match self.engine.as_ref().map(|engine| engine.download_model(id)) {
+            Some(Ok(())) => {
+                self.model_progress.insert(id.to_string(), 0);
+                self.config_error = None;
+            }
+            Some(Err(error)) => self.config_error = Some(error.to_string()),
+            None => self.config_error = Some("Engine unavailable".to_string()),
+        }
+        cx.notify();
+    }
+
+    pub fn delete_model(&mut self, id: &str, cx: &mut Context<Self>) {
+        match floure_core::models::delete_model(&self.config.model_dir, id) {
+            Ok(()) => {
+                self.refresh_models();
+                self.config_notice = Some(format!("Deleted {id}"));
+            }
+            Err(error) => self.config_error = Some(error.to_string()),
+        }
+        cx.notify();
+    }
+
+    pub fn add_dictionary_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let phrase = self.dictionary_phrase.read(cx).value().to_string();
+        let replacement = self.dictionary_replacement.read(cx).value().to_string();
+        let repo = Dictionary::new(floure_core::config::history_db_path());
+        match repo.add(&phrase, &replacement, None, None) {
+            Ok(Some(_)) => {
+                self.dictionary_phrase
+                    .update(cx, |state, cx| state.set_value("", window, cx));
+                self.dictionary_replacement
+                    .update(cx, |state, cx| state.set_value("", window, cx));
+                self.refresh_dictionary();
+                self.config_notice = Some("Added".to_string());
+                self.config_error = None;
+            }
+            Ok(None) => {
+                self.config_error =
+                    Some("Enter a phrase and replacement (60 characters max).".to_string())
+            }
+            Err(error) => self.config_error = Some(error.to_string()),
+        }
+        cx.notify();
+    }
+
+    pub fn delete_dictionary_entry(&mut self, id: i64) {
+        let _ = Dictionary::new(floure_core::config::history_db_path()).delete(id);
+        self.refresh_dictionary();
+    }
+
+    pub fn toggle_dictionary_favorite(&mut self, id: i64) {
+        let _ = Dictionary::new(floure_core::config::history_db_path()).toggle_favorite(id);
+        self.refresh_dictionary();
+    }
+
+    pub fn save_openrouter_key(&mut self, cx: &mut Context<Self>) {
+        let key = self.api_key_input.read(cx).value().to_string();
+        floure_core::llm::set_openrouter_api_key(key.trim().to_string());
+        self.config_notice = Some("OpenRouter key set for this session".to_string());
+        cx.notify();
+    }
+
+    pub fn save_dictionary_hotwords(&mut self, cx: &mut Context<Self>) {
+        let hotwords = self.hotwords_input.read(cx).value().to_string();
+        self.config.hotwords = floure_core::config::normalize_hotwords(&hotwords);
+        self.save_config_now();
+        if let Some(engine) = &self.engine {
+            engine.apply_settings(SettingsUpdate {
+                asr_profile: self.config.asr_profile.clone(),
+                language: self.config.language.clone(),
+                llm_provider: self.config.llm_provider.clone(),
+                llm_mode: self.config.llm_mode,
+                llm_model: self.config.llm_model.clone(),
+                typing_enabled: self.config.typing_enabled,
+                clipboard_enabled: self.config.clipboard_enabled,
+                hotwords: self.config.hotwords.clone(),
+            });
+        }
+        cx.notify();
+    }
+
+    pub fn copy_diagnostics(&mut self, cx: &mut Context<Self>) {
+        match floure_core::diagnostics::get_diagnostics() {
+            Ok(json) => {
+                let _ = copy_to_clipboard(&json);
+                self.config_notice = Some("Diagnostics copied".to_string());
+            }
+            Err(error) => self.config_error = Some(error),
+        }
+        cx.notify();
+    }
+
+    pub fn models_ready(&self) -> bool {
+        speech_model_ready(&self.model_statuses)
+    }
+
+    pub fn onboarding_next(&mut self, cx: &mut Context<Self>) {
+        if !can_advance(self.onboarding_step, self.models_ready()) {
+            self.config_error = Some("Download a speech model to continue.".to_string());
+            cx.notify();
+            return;
+        }
+        self.onboarding_step = (self.onboarding_step + 1).min(2);
+        self.config_error = None;
+        cx.notify();
+    }
+
+    pub fn onboarding_back(&mut self, cx: &mut Context<Self>) {
+        self.onboarding_step = self.onboarding_step.saturating_sub(1);
+        self.config_error = None;
+        cx.notify();
+    }
+
+    pub fn complete_onboarding(&mut self, cx: &mut Context<Self>) {
+        self.config.onboarding_completed = true;
+        self.save_config_now();
+        self.destination = Destination::Dictate;
+        self.onboarding_step = 2;
+        cx.notify();
+    }
+
+    pub fn copy_to_clipboard_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let _ = copy_to_clipboard(text);
+        self.config_notice = Some("Copied".to_string());
+        cx.notify();
+    }
+
     pub fn copy_row(&mut self, text: &str) {
         let _ = copy_to_clipboard(text);
         self.history_notice = Some("Copied".to_string());
@@ -608,6 +942,20 @@ impl FloureApp {
     fn on_quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
         cx.quit();
     }
+}
+
+fn speech_model_ready(statuses: &[ModelStatus]) -> bool {
+    statuses.iter().any(|model| {
+        model.downloaded
+            && matches!(
+                model.id.as_str(),
+                "parakeet-tdt-0.6b-v2-int8" | "whisper-large-v3-turbo-q5_1" | "whisper-base-q5_1"
+            )
+    })
+}
+
+fn can_advance(step: usize, models_ready: bool) -> bool {
+    step != 1 || models_ready
 }
 
 /// Linux users think in Ctrl, not CommandOrControl. The stored value stays in
@@ -685,7 +1033,10 @@ impl Render for FloureApp {
             .bg(theme::ground())
             .text_color(theme::text())
             .font_family(theme::FONT_FAMILY)
-            .child(self.render_rail(cx))
+            .when(!self.config.onboarding_completed, |root| root)
+            .when(self.config.onboarding_completed, |root| {
+                root.child(self.render_rail(cx))
+            })
             .child(
                 div()
                     .flex()
@@ -789,7 +1140,11 @@ impl FloureApp {
                     .text_size(theme::TEXT_SM)
                     .font_weight(theme::semibold())
                     .text_color(theme::text())
-                    .child(self.destination.label()),
+                    .child(if self.config.onboarding_completed {
+                        self.destination.label()
+                    } else {
+                        "Setup"
+                    }),
             )
             .child(
                 div()
@@ -803,6 +1158,9 @@ impl FloureApp {
     }
 
     fn render_content(&self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.config.onboarding_completed {
+            return views::onboarding::render(self, cx);
+        }
         match self.destination {
             Destination::Dictate => views::dictate::render(self, cx),
             Destination::History => views::history::render(self, cx),
@@ -1004,6 +1362,40 @@ mod tests {
             Destination::all().iter().map(|d| d.shortcut()).collect();
         assert_eq!(labels.len(), 4);
         assert_eq!(shortcuts.len(), 4);
+    }
+
+    fn model(id: &str, downloaded: bool) -> ModelStatus {
+        ModelStatus {
+            name: id.to_string(),
+            id: id.to_string(),
+            downloaded,
+            path: String::new(),
+            size_bytes: 0,
+            url: String::new(),
+            backend: String::new(),
+            recommended: false,
+        }
+    }
+
+    #[test]
+    fn onboarding_requires_a_downloaded_speech_model() {
+        assert!(!speech_model_ready(&[]));
+        assert!(!speech_model_ready(&[model(
+            "parakeet-tdt-0.6b-v2-int8",
+            false
+        )]));
+        assert!(speech_model_ready(&[model(
+            "parakeet-tdt-0.6b-v2-int8",
+            true
+        )]));
+        assert!(speech_model_ready(&[model("whisper-base-q5_1", true)]));
+        // A downloaded LLM or VAD is not enough to dictate.
+        assert!(!speech_model_ready(&[model("s1-mini-q4_k_m", true)]));
+
+        assert!(can_advance(0, false), "mic step never requires a model");
+        assert!(!can_advance(1, false));
+        assert!(can_advance(1, true));
+        assert!(can_advance(2, false));
     }
 
     #[test]

@@ -209,6 +209,28 @@ struct DownloadGuard {
 /// True while a fetch for this target dir runs in this process. Lets
 /// callers fail fast with "still downloading" instead of spawning a
 /// second writer that `download_model` would only reject.
+/// Delete one model directory. Confined to the models root so a crafted id
+/// can never remove anything else.
+pub fn delete_model(model_dir: &Path, id: &str) -> Result<()> {
+    let target = model_dir.join(id);
+    if !target.exists() {
+        return Ok(());
+    }
+    let root = model_dir
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("models directory: {e}"))?;
+    let target = target
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("model directory: {e}"))?;
+    if !target.starts_with(&root) {
+        return Err(anyhow::anyhow!(
+            "refusing to delete outside the models directory"
+        ));
+    }
+    std::fs::remove_dir_all(target)?;
+    Ok(())
+}
+
 pub fn is_downloading(target_dir: &Path) -> bool {
     active_downloads()
         .lock()
@@ -615,4 +637,46 @@ pub(crate) fn walk_dir_size(path: &std::path::Path) -> Result<u64, anyhow::Error
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+
+    #[test]
+    fn delete_is_confined_to_the_models_root() {
+        let root = std::env::temp_dir().join(format!(
+            "floure-delete-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        let model = root.join("parakeet");
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(model.join("model.onnx"), b"x").unwrap();
+
+        delete_model(&root, "parakeet").unwrap();
+        assert!(!model.exists());
+
+        let escape = root
+            .parent()
+            .unwrap()
+            .join(format!("floure-escape-{}", std::process::id()));
+        std::fs::create_dir_all(&escape).unwrap();
+        assert!(
+            delete_model(
+                &root,
+                &format!("../{}", escape.file_name().unwrap().to_string_lossy())
+            )
+            .is_err()
+        );
+        assert!(
+            escape.exists(),
+            "the guard must not delete outside the root"
+        );
+        let _ = std::fs::remove_dir_all(&escape);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
