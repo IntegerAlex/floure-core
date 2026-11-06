@@ -518,10 +518,10 @@ fn checkbox(
         .id("row-checkbox")
         .role(gpui::Role::CheckBox)
         .aria_label("Select transcript")
-        .mt(px(2.0))
-        .size(px(16.0))
+        .mt(px(1.0))
+        .size(px(20.0))
         .flex_shrink_0()
-        .rounded(px(4.0))
+        .rounded(px(5.0))
         .border_1()
         .border_color(if checked {
             theme::text()

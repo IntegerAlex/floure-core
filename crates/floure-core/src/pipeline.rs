@@ -531,11 +531,30 @@ pub fn warm_engines(app: crate::sink::AppHandle, config: AppConfig) {
     if get_running_flag().load(Ordering::SeqCst) {
         return;
     }
-    let vad_ok = MODEL_MANIFEST
-        .iter()
-        .find(|m| m.id == "silero-vad")
-        .map(|m| verify_model(&config.model_dir, m))
-        .unwrap_or(false);
+    let Some(vad_manifest) = MODEL_MANIFEST.iter().find(|m| m.id == "silero-vad") else {
+        return;
+    };
+    if !verify_model(&config.model_dir, vad_manifest) {
+        // Small file, but a first press must not block on it. Fetch it here,
+        // on the warm thread, and let progress travel through the event sink.
+        let vad_dir = config.model_dir.join("silero-vad");
+        if std::fs::create_dir_all(&vad_dir).is_err() {
+            return;
+        }
+        let app_dl = app.clone();
+        let id = vad_manifest.id;
+        if download_model(vad_manifest, &vad_dir, move |percent, bytes| {
+            let _ = app_dl.emit(
+                "model_download_progress",
+                serde_json::json!({"id": id, "percent": percent, "bytes": bytes}),
+            );
+        })
+        .is_err()
+        {
+            return;
+        }
+    }
+    let vad_ok = verify_model(&config.model_dir, vad_manifest);
     let asr_ok = find_model(config.asr_profile.model_id())
         .map(|m| verify_model(&config.model_dir, m))
         .unwrap_or(false);
