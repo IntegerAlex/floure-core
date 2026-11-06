@@ -1,20 +1,14 @@
+mod app;
+mod theme;
+mod views;
+
 use gpui::{
-    App, Bounds, Context, IntoElement, ParentElement, Render, Styled, Window, WindowBounds,
-    WindowDecorations, WindowOptions, div, prelude::*, px, rgb, size,
+    App, AppContext, Bounds, QuitMode, WindowBounds, WindowDecorations, WindowOptions, px, size,
 };
 use gpui_component::Root;
 
-struct FloureApp;
-
-impl Render for FloureApp {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .bg(rgb(0x000000))
-            .text_color(rgb(0xF5F5F7))
-            .child("Floure")
-    }
-}
+use floure_core::config::{AppConfig, history_db_path};
+use floure_core::{Engine, Paths, migrate};
 
 fn main() {
     if std::env::args().any(|arg| arg == "--version") {
@@ -22,24 +16,48 @@ fn main() {
         return;
     }
 
-    gpui_platform::application().run(|cx: &mut App| {
-        gpui_component::init(cx);
+    // Migrate before loading config: the bridge writes values into config.json.
+    let config_path = floure_core::config::config_path();
+    let report = migrate(&history_db_path(), &config_path);
+    if let Err(error) = &report {
+        eprintln!("[migrate] {error}");
+    }
+    let config = AppConfig::load();
 
-        let bounds = Bounds::centered(None, size(px(960.), px(700.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: None,
-                window_decorations: Some(WindowDecorations::Client),
-                app_id: Some("floure".into()),
-                inactive_frame_interval: None,
-                ..Default::default()
-            },
-            |window, cx| {
-                let view = cx.new(|_| FloureApp);
-                cx.new(|cx| Root::new(view, window, cx))
-            },
-        )
-        .expect("failed to open Floure window");
-    });
+    let engine = match Engine::new(config.clone(), Paths::from_config(&config)) {
+        Ok(engine) => Some(engine),
+        Err(error) => {
+            eprintln!("[engine] {error}");
+            None
+        }
+    };
+
+    gpui_platform::application()
+        .with_quit_mode(QuitMode::Explicit)
+        .run(move |cx: &mut App| {
+            gpui_component::init(cx);
+            cx.bind_keys(app::key_bindings());
+
+            let bounds = Bounds::centered(None, size(px(960.), px(700.)), cx);
+            let config = config.clone();
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(px(720.), px(560.))),
+                    titlebar: None,
+                    window_decorations: Some(WindowDecorations::Client),
+                    app_id: Some("floure".into()),
+                    inactive_frame_interval: None,
+                    ..Default::default()
+                },
+                move |window, cx| {
+                    let config = config.clone();
+                    let view = cx.new(|cx| {
+                        app::FloureApp::new(window, cx, config, engine, floure_core::version())
+                    });
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
+            )
+            .expect("failed to open Floure window");
+        });
 }

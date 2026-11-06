@@ -240,10 +240,15 @@ fn default_true() -> bool {
 
 /// Config directory for `floure/config.json`
 /// (`~/.config/floure`, `%APPDATA%/floure`, ...).
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     dirs_next::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("floure")
+}
+
+/// The config file the app reads and writes.
+pub fn config_path() -> PathBuf {
+    config_dir().join("config.json")
 }
 
 /// Canonical data directory for the app.

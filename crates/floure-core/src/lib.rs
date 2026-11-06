@@ -30,6 +30,7 @@ pub use insights::{
     HeatmapDay, Insights, InsightsCategory, InsightsRepo, InsightsStreak, VoiceIntelligence,
     WeeklyWordDay,
 };
+pub use migrate::{MigrationReport, migrate};
 
 /// The application version compiled into the binary.
 pub fn version() -> &'static str {
