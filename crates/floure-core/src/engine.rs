@@ -136,6 +136,18 @@ impl Engine {
         crate::pipeline::is_ready()
     }
 
+    /// Preload the ASR and LLM engines so the first press does not pay the
+    /// model-load latency. Runs off-thread; progress arrives as events.
+    pub fn warm(&self) {
+        let config = self
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let app = self.sink.app_handle();
+        std::thread::spawn(move || crate::pipeline::warm_engines(app, config));
+    }
+
     /// Start a model download in the background. Progress and the terminal
     /// state travel only through `EngineEvent`; the call returns immediately.
     pub fn download_model(&self, id: &str) -> Result<()> {
