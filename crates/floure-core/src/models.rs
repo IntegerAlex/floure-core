@@ -454,8 +454,27 @@ fn download_files(
 
     std::fs::create_dir_all(target_dir)?;
     let total: u64 = model.files.iter().map(|file| file.size_bytes).sum();
+    fetch_files(model.files, target_dir, total, &mut progress)?;
+
+    if !verify_model(target_dir.parent().unwrap_or(target_dir), model) {
+        return Err(anyhow::anyhow!(
+            "{} files missing after download in {}",
+            model.id,
+            target_dir.display()
+        ));
+    }
+    std::fs::write(target_dir.join(".downloaded"), b"")?;
+    Ok(())
+}
+
+fn fetch_files(
+    files: &[ModelFile],
+    target_dir: &Path,
+    total: u64,
+    progress: &mut impl FnMut(usize, u64),
+) -> Result<()> {
     let mut completed: u64 = 0;
-    for file in model.files {
+    for file in files {
         let dest = target_dir.join(file.dest);
         let mut offset = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
         if offset > file.size_bytes {
@@ -478,8 +497,7 @@ fn download_files(
             &dest,
             file.size_bytes,
             offset,
-            &mut |percent, bytes| {
-                let _ = percent;
+            &mut |_percent, bytes| {
                 sent = bytes;
                 let done = previous + bytes;
                 let overall = if total > 0 {
@@ -492,15 +510,6 @@ fn download_files(
         )?;
         completed = previous + sent;
     }
-
-    if !verify_model(target_dir.parent().unwrap_or(target_dir), model) {
-        return Err(anyhow::anyhow!(
-            "{} files missing after download in {}",
-            model.id,
-            target_dir.display()
-        ));
-    }
-    std::fs::write(target_dir.join(".downloaded"), b"")?;
     Ok(())
 }
 
@@ -823,6 +832,53 @@ mod delete_tests {
 #[cfg(test)]
 mod manifest_tests {
     use super::*;
+
+    #[test]
+    fn multifile_download_writes_expected_names_and_reaches_full_progress() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for body in ["abc", "defgh"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
+        });
+
+        let encoder: &'static str = Box::leak(format!("http://{addr}/encoder").into_boxed_str());
+        let decoder: &'static str = Box::leak(format!("http://{addr}/decoder").into_boxed_str());
+        let files = [
+            ModelFile {
+                url: encoder,
+                dest: "encoder.onnx",
+                size_bytes: 3,
+            },
+            ModelFile {
+                url: decoder,
+                dest: "decoder.onnx",
+                size_bytes: 5,
+            },
+        ];
+        let dir = std::env::temp_dir().join(format!("floure-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut last = 0;
+        fetch_files(&files, &dir, 8, &mut |percent, _| last = percent).unwrap();
+        assert_eq!(std::fs::read(dir.join("encoder.onnx")).unwrap(), b"abc");
+        assert_eq!(std::fs::read(dir.join("decoder.onnx")).unwrap(), b"defgh");
+        assert_eq!(last, 100);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn ultra_is_a_complete_multifile_parakeet_bundle() {
