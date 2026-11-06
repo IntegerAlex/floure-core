@@ -2,10 +2,13 @@
 
 use std::sync::Arc;
 
+use std::collections::HashSet;
+
 use gpui::{
-    AnyElement, Context, FocusHandle, IntoElement, KeyBinding, MouseButton, ParentElement, Render,
-    SharedString, Styled, Window, actions, div, prelude::*, px,
+    AnyElement, Context, Entity, FocusHandle, IntoElement, KeyBinding, MouseButton, ParentElement,
+    Render, SharedString, Styled, Window, actions, div, prelude::*, px,
 };
+use gpui_component::input::InputState;
 
 use floure_core::config::AppConfig;
 use floure_core::output::copy_to_clipboard;
@@ -161,6 +164,15 @@ pub struct FloureApp {
     pub engine_error: Option<String>,
     pub hotkey_status: HotkeyStatus,
     pub history: Vec<TranscriptRow>,
+    pub history_query: String,
+    pub history_favorites_only: bool,
+    pub history_mode: Option<&'static str>,
+    pub history_limit: usize,
+    pub history_selected: HashSet<i64>,
+    pub history_expanded: HashSet<i64>,
+    pub history_confirm_delete: Option<usize>,
+    pub history_notice: Option<String>,
+    pub search_input: Entity<InputState>,
     pub insights: Option<Insights>,
     pub history_error: Option<String>,
     activate_next_frame: bool,
@@ -186,6 +198,8 @@ impl FloureApp {
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
+        let search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search transcripts"));
 
         let warming = engine.as_ref().is_some_and(|engine| engine.is_warming());
         Self {
@@ -206,6 +220,15 @@ impl FloureApp {
             engine_error: None,
             hotkey_status,
             history,
+            history_query: String::new(),
+            history_favorites_only: false,
+            history_mode: None,
+            history_limit: 50,
+            history_selected: HashSet::new(),
+            history_expanded: HashSet::new(),
+            history_confirm_delete: None,
+            history_notice: None,
+            search_input,
             insights,
             history_error,
             activate_next_frame: false,
@@ -233,6 +256,18 @@ impl FloureApp {
             })
             .detach();
         }
+
+        let search = self.search_input.clone();
+        cx.observe(&search, |this, input, cx| {
+            let query = input.read(cx).value().to_string();
+            if this.history_query != query {
+                this.history_query = query;
+                this.history_limit = 50;
+                this.refresh_history();
+                cx.notify();
+            }
+        })
+        .detach();
 
         cx.spawn(async move |this, cx| {
             loop {
@@ -414,6 +449,9 @@ impl FloureApp {
     pub fn go(&mut self, destination: Destination, cx: &mut Context<Self>) {
         if self.destination != destination {
             self.destination = destination;
+            if destination == Destination::History {
+                self.refresh_history();
+            }
             self.refresh_data();
             cx.notify();
         }
@@ -421,14 +459,117 @@ impl FloureApp {
 
     fn refresh_data(&mut self) {
         let db = floure_core::config::history_db_path();
-        match History::new(&db).recent(200) {
+        self.insights = InsightsRepo::new(&db).summary().ok();
+        if self.destination == Destination::History {
+            self.refresh_history();
+        }
+    }
+
+    /// Load the current filter into `history`. Search is FTS-backed and
+    /// immediate; filtering runs before the UI sees the rows.
+    pub fn refresh_history(&mut self) {
+        let db = floure_core::config::history_db_path();
+        let repo = History::new(&db);
+        let query = self.history_query.trim();
+        let result = if query.is_empty() {
+            repo.recent(self.history_limit)
+        } else {
+            repo.search(query, self.history_limit)
+        };
+        match result {
             Ok(rows) => {
-                self.history = rows;
+                self.history = rows
+                    .into_iter()
+                    .filter(|row| {
+                        (!self.history_favorites_only || row.favorite != 0)
+                            && self.history_mode.is_none_or(|mode| row.mode == mode)
+                    })
+                    .collect();
                 self.history_error = None;
             }
             Err(error) => self.history_error = Some(error.to_string()),
         }
+    }
+
+    pub fn toggle_history_mode(&mut self, mode: Option<&'static str>) {
+        self.history_mode = if self.history_mode == mode {
+            None
+        } else {
+            mode
+        };
+        self.history_limit = 50;
+        self.refresh_history();
+    }
+
+    pub fn toggle_favorite_filter(&mut self) {
+        self.history_favorites_only = !self.history_favorites_only;
+        self.history_limit = 50;
+        self.refresh_history();
+    }
+
+    pub fn toggle_selected(&mut self, id: i64) {
+        if !self.history_selected.insert(id) {
+            self.history_selected.remove(&id);
+        }
+        self.history_confirm_delete = None;
+    }
+
+    pub fn toggle_expanded(&mut self, id: i64) {
+        if !self.history_expanded.insert(id) {
+            self.history_expanded.remove(&id);
+        }
+    }
+
+    pub fn set_favorite(&mut self, id: i64, favorite: bool) {
+        let db = floure_core::config::history_db_path();
+        let _ = History::new(&db).set_favorite(id, favorite);
+        self.refresh_history();
+    }
+
+    pub fn delete_history_row(&mut self, id: i64) {
+        let db = floure_core::config::history_db_path();
+        let _ = History::new(&db).delete(&[id]);
+        self.history_selected.remove(&id);
+        self.refresh_history();
         self.insights = InsightsRepo::new(&db).summary().ok();
+    }
+
+    pub fn confirm_delete_selected(&mut self) {
+        let ids: Vec<i64> = self.history_selected.iter().copied().collect();
+        let db = floure_core::config::history_db_path();
+        let _ = History::new(&db).delete(&ids);
+        self.history_selected.clear();
+        self.history_confirm_delete = None;
+        self.refresh_history();
+        self.insights = InsightsRepo::new(&db).summary().ok();
+    }
+
+    pub fn load_more_history(&mut self) {
+        self.history_limit += 50;
+        self.refresh_history();
+    }
+
+    /// Export exactly what the screen shows, so the count in the notice is
+    /// the count in the file.
+    pub fn export_history(&mut self) {
+        let csv = History::new(floure_core::config::history_db_path()).export_csv(&self.history);
+        let path = floure_core::config::data_dir().join("history-export.csv");
+        match std::fs::write(&path, csv) {
+            Ok(()) => {
+                self.history_notice = Some(format!(
+                    "Exported {} transcript{} to {}",
+                    self.history.len(),
+                    if self.history.len() == 1 { "" } else { "s" },
+                    path.display()
+                ));
+            }
+            Err(error) => self.history_notice = Some(format!("Export failed: {error}")),
+        }
+    }
+
+    pub fn copy_row(&mut self, text: &str) {
+        let _ = copy_to_clipboard(text);
+        self.history_notice = Some("Copied".to_string());
     }
 
     pub fn toggle_recording(&mut self, cx: &mut Context<Self>) {

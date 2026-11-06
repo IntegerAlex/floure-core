@@ -61,6 +61,7 @@ fn main() {
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
+            apply_component_theme(cx);
             cx.bind_keys(app::key_bindings());
 
             let bounds = Bounds::centered(None, size(px(960.), px(700.)), cx);
@@ -99,6 +100,27 @@ fn main() {
             )
             .expect("failed to open Floure window");
         });
+}
+
+/// gpui-component's own widgets (search input, menus) follow the same
+/// monochrome tokens as the shell instead of its default palettes.
+fn apply_component_theme(cx: &mut App) {
+    use gpui_component::{Theme, ThemeMode};
+    Theme::change(ThemeMode::Dark, None, cx);
+    Theme::update(cx, |theme| {
+        theme.shadow = false;
+        theme.font_family = theme::FONT_FAMILY.into();
+        theme.font_size = px(15.0);
+        theme.colors.background = theme::ground().into();
+        theme.colors.foreground = theme::text().into();
+        theme.colors.border = theme::border().into();
+        theme.colors.input = theme::surface().into();
+        theme.colors.muted = theme::surface().into();
+        theme.colors.muted_foreground = theme::text_muted().into();
+        theme.colors.caret = theme::text().into();
+        theme.colors.primary = theme::accent().into();
+        theme.colors.primary_foreground = theme::text().into();
+    });
 }
 
 /// Handle the CLI trigger surface before any GPUI or audio initialisation, so

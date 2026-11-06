@@ -96,6 +96,21 @@ impl History {
         recent(&self.conn()?, limit)
     }
 
+    /// Local calendar dates used for Today/Yesterday headings. `created_at`
+    /// stays UTC on disk; only these labels are local.
+    pub fn today_and_yesterday(&self) -> (String, String) {
+        let conn = match self.conn() {
+            Ok(conn) => conn,
+            Err(_) => return (String::new(), String::new()),
+        };
+        conn.query_row(
+            "SELECT date('now', 'localtime'), date('now', 'localtime', '-1 day')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap_or_default()
+    }
+
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<TranscriptRow>> {
         search(&self.conn()?, query, limit)
     }
@@ -203,6 +218,22 @@ mod tests {
         let hits = search(&conn, "hello", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].raw_text, "hello world");
+    }
+
+    #[test]
+    fn export_only_contains_the_rows_the_screen_shows() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO transcripts(raw_text, processed_text, language, mode, model, duration_sec)
+             VALUES ('keep me', 'keep me', 'en', 'cleanup', 'parakeet', 1.0), ('hide me', 'hide me', 'en', 'cleanup', 'parakeet', 1.0)",
+            [],
+        )
+        .unwrap();
+        let rows = search(&conn, "keep", 10).unwrap();
+        let csv = History::new("unused").export_csv(&rows);
+        assert!(csv.contains("keep me"));
+        assert!(!csv.contains("hide me"));
+        assert_eq!(csv.lines().count(), 2, "header plus one row");
     }
 
     #[test]
