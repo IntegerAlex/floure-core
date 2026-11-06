@@ -46,4 +46,6 @@ package() {
   done
   install -Dm644 packaging/icons/floure.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/floure.svg"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/floure/LICENSE"
+  install -Dm644 crates/floure-app/assets/fonts/OFL.txt \
+    "$pkgdir/usr/share/licenses/floure/OFL-Inter.txt"
 }

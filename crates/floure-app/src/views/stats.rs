@@ -57,7 +57,7 @@ fn figures(insights: &Insights) -> AnyElement {
                 .child(
                     div()
                         .text_size(theme::TEXT_XS)
-                        .text_color(theme::text_faint())
+                        .text_color(theme::text_muted())
                         .child(label),
                 )
                 .child(
@@ -179,7 +179,7 @@ fn weekly_bars(insights: &Insights) -> AnyElement {
                 .child(
                     div()
                         .text_size(theme::TEXT_XS)
-                        .text_color(theme::text_faint())
+                        .text_color(theme::text_muted())
                         .child(week.label.clone()),
                 ),
         );
@@ -191,7 +191,7 @@ fn weekly_bars(insights: &Insights) -> AnyElement {
         .child(
             div()
                 .text_size(theme::TEXT_XS)
-                .text_color(theme::text_faint())
+                .text_color(theme::text_muted())
                 .child(format!("12 weeks · max {raw_max} words")),
         )
         .child(row)

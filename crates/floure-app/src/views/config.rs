@@ -69,6 +69,8 @@ pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             div()
                 .flex()
                 .flex_row()
+                .flex_1()
+                .min_h_0()
                 .gap(theme::SPACE_8)
                 .mt(theme::SPACE_6)
                 .child(sections)
@@ -96,12 +98,19 @@ fn header(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         );
     }
     if app.config_dirty {
-        right = right.child(button(
-            "config-apply",
-            "Apply",
-            false,
-            cx.listener(|this, _, _, cx| this.apply_config(cx)),
-        ));
+        right = right
+            .child(button(
+                "config-discard",
+                "Discard",
+                false,
+                cx.listener(|this, _, _, cx| this.discard_config(cx)),
+            ))
+            .child(button(
+                "config-apply",
+                "Apply",
+                false,
+                cx.listener(|this, _, _, cx| this.apply_config(cx)),
+            ));
     }
 
     div()
@@ -125,9 +134,9 @@ fn header(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                         .text_size(theme::TEXT_XS)
                         .text_color(theme::text_faint())
                         .child(if app.config_dirty {
-                            "Changes are staged — press Apply"
+                            "Staged engine changes — press Apply"
                         } else {
-                            "Changes save as you make them"
+                            "Engine settings stage; output and device changes save immediately"
                         }),
                 ),
         )
@@ -147,11 +156,14 @@ fn section(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         _ => diagnostics(app, cx),
     };
     div()
+        .id("config-body")
         .flex()
         .flex_col()
         .flex_1()
         .min_w_0()
+        .min_h_0()
         .max_w(px(620.0))
+        .overflow_y_scroll()
         .child(section_title(SECTIONS[app.config_section]))
         .child(content)
         .into_any_element()
@@ -188,47 +200,19 @@ fn general(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             ),
         ))
         .child(setting(
-            "Activation",
-            Some("Restart Floure after changing on X11"),
-            button(
-                "cycle-ptt",
-                match app.config.ptt_mode {
-                    PttMode::Hold => "Hold to talk",
-                    PttMode::Toggle => "Tap to toggle",
-                },
-                false,
-                cx.listener(|this, _, _, cx| {
-                    this.toggle_ptt_mode();
-                    cx.notify();
-                }),
-            ),
-        ))
-        .child(setting(
-            "Typing",
-            Some("Type the transcript into the focused app"),
-            toggle(
-                app.config.typing_enabled,
-                cx.listener(|this, _, _, cx| {
-                    this.toggle_typing();
-                    cx.notify();
-                }),
-            ),
-        ))
-        .child(setting(
-            "Clipboard",
-            Some("Copy every transcript"),
-            toggle(
-                app.config.clipboard_enabled,
-                cx.listener(|this, _, _, cx| {
-                    this.toggle_clipboard();
-                    cx.notify();
-                }),
-            ),
-        ))
-        .child(setting(
             "Motion",
-            None,
+            Some("Follows your desktop's reduced-motion preference"),
             value(if app.reduce_motion { "Reduced" } else { "Full" }),
+        ))
+        .child(setting(
+            "Setup",
+            Some("Re-run microphone, model, and trigger setup"),
+            button(
+                "rerun-setup",
+                "Run setup again",
+                false,
+                cx.listener(|this, _, _, cx| this.rerun_setup(cx)),
+            ),
         ))
         .into_any_element()
 }
@@ -444,23 +428,33 @@ fn dictionary(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                     .flex_row()
                     .items_center()
                     .gap(theme::SPACE_2)
-                    .child(text_action(
+                    .child(icon_action(
                         SharedString::from(format!("dict-fav-{id}")),
-                        if entry.is_favorite { "Starred" } else { "Star" },
+                        if entry.is_favorite {
+                            "star-filled"
+                        } else {
+                            "star"
+                        },
+                        if entry.is_favorite {
+                            "Unstar entry"
+                        } else {
+                            "Star entry"
+                        },
                         if entry.is_favorite {
                             theme::text()
                         } else {
-                            theme::text_faint()
+                            theme::text_muted()
                         },
                         cx.listener(move |this, _, _, cx| {
                             this.toggle_dictionary_favorite(id);
                             cx.notify();
                         }),
                     ))
-                    .child(text_action(
+                    .child(icon_action(
                         SharedString::from(format!("dict-delete-{id}")),
-                        "Remove",
-                        theme::text_faint(),
+                        "trash-2",
+                        "Remove entry",
+                        theme::text_muted(),
                         cx.listener(move |this, _, _, cx| {
                             this.delete_dictionary_entry(id);
                             cx.notify();
@@ -565,6 +559,8 @@ fn output(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             "Typing",
             Some("Type into the window that had focus when you started"),
             toggle(
+                "toggle-typing",
+                "Typing",
                 app.config.typing_enabled,
                 cx.listener(|this, _, _, cx| {
                     this.toggle_typing();
@@ -576,6 +572,8 @@ fn output(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             "Clipboard",
             Some("Copy every transcript as well"),
             toggle(
+                "toggle-clipboard",
+                "Clipboard",
                 app.config.clipboard_enabled,
                 cx.listener(|this, _, _, cx| {
                     this.toggle_clipboard();
@@ -732,7 +730,7 @@ fn stacked(label: &str, hint: Option<&str>, control: impl IntoElement) -> AnyEle
         head = head.child(
             div()
                 .text_size(theme::TEXT_XS)
-                .text_color(theme::text_faint())
+                .text_color(theme::text_muted())
                 .child(hint.to_string()),
         );
     }
@@ -759,7 +757,7 @@ fn setting(label: &str, hint: Option<&str>, control: impl IntoElement) -> AnyEle
         left = left.child(
             div()
                 .text_size(theme::TEXT_XS)
-                .text_color(theme::text_faint())
+                .text_color(theme::text_muted())
                 .child(hint.to_string()),
         );
     }
@@ -821,42 +819,41 @@ fn button(
             theme::text_secondary()
         })
         .cursor_pointer()
+        .hover(|style| style.bg(theme::raised()))
         .when(!disabled, |this| this.on_click(listener))
         .child(label.to_string())
         .into_any_element()
 }
 
 fn toggle(
+    id: &'static str,
+    label: &'static str,
     on: bool,
     listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
-    let (label, color) = if on {
-        ("On", theme::text())
-    } else {
-        ("Off", theme::text_faint())
-    };
+    let text = if on { "On" } else { "Off" };
     div()
-        .id("toggle")
+        .id(id)
         .role(gpui::Role::Switch)
-        .aria_label(label)
-        .px(theme::SPACE_3)
+        .aria_label(format!("{label}: {text}"))
+        .px(px(3.0))
+        .py(px(3.0))
         .h(px(28.0))
+        .w(px(48.0))
         .flex()
         .items_center()
-        .gap(theme::SPACE_2)
         .rounded(px(9999.0))
         .border_1()
         .border_color(theme::border())
-        .text_size(theme::TEXT_XS)
-        .text_color(color)
+        .bg(if on { theme::text() } else { theme::raised() })
         .cursor_pointer()
+        .hover(|style| style.border_color(theme::border_strong()))
         .on_click(listener)
-        .child(div().size(px(6.0)).rounded(px(9999.0)).bg(if on {
-            theme::text()
+        .child(div().size(px(20.0)).rounded(px(9999.0)).bg(if on {
+            theme::ground()
         } else {
-            theme::text_faint()
+            theme::text_muted()
         }))
-        .child(label)
         .into_any_element()
 }
 
@@ -900,8 +897,9 @@ fn code_with_copy(text: &'static str, cx: &mut Context<FloureApp>) -> AnyElement
         .into_any_element()
 }
 
-fn text_action(
+fn icon_action(
     id: SharedString,
+    icon: &'static str,
     label: &'static str,
     color: gpui::Rgba,
     listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
@@ -910,15 +908,15 @@ fn text_action(
         .id(id)
         .role(gpui::Role::Button)
         .aria_label(label)
-        .px(px(6.0))
-        .py(px(2.0))
-        .rounded(px(5.0))
-        .text_size(theme::TEXT_XS)
-        .text_color(color)
+        .size(px(28.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.0))
         .cursor_pointer()
-        .hover(|style| style.bg(theme::raised()).text_color(theme::text()))
+        .hover(|style| style.bg(theme::raised()))
         .on_click(listener)
-        .child(label)
+        .child(theme::icon(icon, px(15.0), color))
         .into_any_element()
 }
 

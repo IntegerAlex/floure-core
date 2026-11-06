@@ -18,6 +18,8 @@ install -Dm644 packaging/floure.metainfo.xml "$stage/share/metainfo/floure.metai
 install -Dm644 packaging/icons/512x512.png \
   "$stage/share/icons/hicolor/512x512/apps/floure.png"
 install -Dm644 LICENSE "$stage/share/licenses/floure/LICENSE"
+install -Dm644 crates/floure-app/assets/fonts/OFL.txt \
+  "$stage/share/licenses/floure/OFL-Inter.txt"
 
 cat > "$stage/INSTALL.md" <<'EOF'
 # Floure portable build

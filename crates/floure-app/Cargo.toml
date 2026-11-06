@@ -47,6 +47,7 @@ assets = [
   ["packaging/icons/512x512.png", "usr/share/icons/hicolor/512x512/apps/floure.png", "644"],
   ["packaging/icons/floure.svg", "usr/share/icons/hicolor/scalable/apps/floure.svg", "644"],
   ["LICENSE", "usr/share/licenses/floure/", "644"],
+  ["crates/floure-app/assets/fonts/OFL.txt", "usr/share/licenses/floure/OFL-Inter.txt", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -66,4 +67,5 @@ assets = [
   { source = "packaging/icons/512x512.png", dest = "/usr/share/icons/hicolor/512x512/apps/floure.png", mode = "644" },
   { source = "packaging/icons/floure.svg", dest = "/usr/share/icons/hicolor/scalable/apps/floure.svg", mode = "644" },
   { source = "LICENSE", dest = "/usr/share/licenses/floure/LICENSE", mode = "644" },
+  { source = "crates/floure-app/assets/fonts/OFL.txt", dest = "/usr/share/licenses/floure/OFL-Inter.txt", mode = "644" },
 ]

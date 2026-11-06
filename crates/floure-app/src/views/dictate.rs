@@ -60,7 +60,7 @@ pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                 .justify_center()
                 .gap(theme::SPACE_4)
                 .child(center)
-                .child(shortcut_pill(app, cx))
+                .when(!app.recording, |block| block.child(shortcut_pill(app, cx)))
                 .child(waveform(app)),
         )
         .child(transcript_panel(app, cx))
@@ -99,43 +99,11 @@ fn mic_button(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             })
         })
         .child(if app.recording {
-            div()
-                .size(px(20.0))
-                .rounded(px(5.0))
-                .bg(glyph)
-                .into_any_element()
+            theme::icon("square-filled", px(24.0), glyph).into_any_element()
         } else {
-            big_mic(glyph)
+            theme::icon("mic", px(40.0), glyph).into_any_element()
         })
         .on_click(cx.listener(|this, _, _, cx| this.toggle_recording(cx)))
-        .into_any_element()
-}
-
-fn big_mic(color: gpui::Rgba) -> AnyElement {
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .child(
-            div()
-                .w(px(16.0))
-                .h(px(28.0))
-                .rounded(px(9.0))
-                .border_2()
-                .border_color(color),
-        )
-        .child(
-            div()
-                .w(px(28.0))
-                .h(px(15.0))
-                .mt(px(-7.0))
-                .border_2()
-                .border_t_0()
-                .rounded_b(px(15.0))
-                .border_color(color),
-        )
-        .child(div().w(px(2.0)).h(px(6.0)).bg(color))
-        .child(div().w(px(14.0)).h(px(2.0)).rounded(px(1.0)).bg(color))
         .into_any_element()
 }
 
@@ -186,7 +154,7 @@ fn shortcut_pill(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         pill = pill.child(
             div()
                 .text_size(theme::TEXT_XS)
-                .text_color(theme::text_faint())
+                .text_color(theme::text_muted())
                 .child(hint),
         );
     }
@@ -207,7 +175,7 @@ fn waveform(app: &FloureApp) -> AnyElement {
     let color = if app.recording {
         theme::text_secondary()
     } else {
-        theme::text_faint()
+        theme::text_muted()
     };
     let mut row = div()
         .flex()
@@ -266,45 +234,60 @@ fn transcript_panel(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement 
     }
 
     let has_lines = !app.utterances.is_empty();
-    panel = panel.child(
-        div()
+    let active = has_lines
+        || app.recording
+        || matches!(
+            app.status,
+            RunState::Transcribing | RunState::Rewriting | RunState::Stopping
+        );
+    let mut head = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .mb(theme::SPACE_4)
+        .child(
+            div()
+                .text_size(theme::TEXT_XS)
+                .text_color(theme::text_muted())
+                .child("Transcript"),
+        );
+    if active {
+        let mut actions = div()
             .flex()
             .flex_row()
-            .items_center()
-            .justify_between()
-            .mb(theme::SPACE_4)
-            .child(
-                div()
-                    .text_size(theme::TEXT_XS)
-                    .text_color(theme::text_faint())
-                    .child("Transcript"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(theme::SPACE_3)
-                    .text_size(theme::TEXT_XS)
-                    .child(action(
-                        "copy-transcript",
-                        "Copy",
-                        has_lines,
-                        cx.listener(|this, _, _, _| this.copy_latest()),
-                    ))
-                    .child(action(
-                        "cancel-transcript",
-                        "Cancel",
-                        app.recording,
-                        cx.listener(|this, _, _, cx| this.cancel(cx)),
-                    ))
-                    .child(action(
-                        "clear-transcript",
-                        "Clear",
-                        has_lines,
-                        cx.listener(|this, _, _, cx| this.clear(cx)),
-                    )),
-            ),
-    );
+            .gap(theme::SPACE_3)
+            .text_size(theme::TEXT_XS);
+        if has_lines {
+            actions = actions
+                .child(action(
+                    "copy-transcript",
+                    if app.transcript_copied {
+                        "Copied"
+                    } else {
+                        "Copy all"
+                    },
+                    true,
+                    cx.listener(|this, _, _, _| this.copy_transcript()),
+                ))
+                .child(action(
+                    "clear-transcript",
+                    "Clear",
+                    true,
+                    cx.listener(|this, _, _, cx| this.clear(cx)),
+                ));
+        }
+        if app.recording {
+            actions = actions.child(action(
+                "cancel-transcript",
+                "Cancel",
+                true,
+                cx.listener(|this, _, _, cx| this.cancel(cx)),
+            ));
+        }
+        head = head.child(actions);
+    }
+    panel = panel.child(head);
 
     if has_lines {
         let start = app.utterances.len().saturating_sub(4);
@@ -337,9 +320,15 @@ fn transcript_panel(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement 
         }
         panel = panel.child(lines);
     } else {
-        let title = match app.hotkey_status {
-            HotkeyStatus::Registered(_) => "Press the shortcut and speak",
-            _ => "Trigger dictation and speak",
+        let title = if app.recording {
+            "Listening — speak now"
+        } else if matches!(app.status, RunState::Transcribing | RunState::Rewriting) {
+            "Working on it…"
+        } else {
+            match app.hotkey_status {
+                HotkeyStatus::Registered(_) => "Press the shortcut and speak",
+                _ => "Trigger dictation and speak",
+            }
         };
         panel = panel
             .child(
@@ -352,12 +341,14 @@ fn transcript_panel(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement 
                 div()
                     .mt(theme::SPACE_2)
                     .text_size(theme::TEXT_BASE)
-                    .text_color(theme::text_faint())
+                    .text_color(theme::text_muted())
                     .child("Your words appear here as you finish each sentence."),
             );
     }
 
-    panel = panel.child(session_strip(app));
+    if active {
+        panel = panel.child(session_strip(app));
+    }
     panel.into_any_element()
 }
 
@@ -396,7 +387,7 @@ fn session_strip(app: &FloureApp) -> AnyElement {
         .border_color(theme::border())
         .text_size(theme::TEXT_XS)
         .font_features(theme::tabular())
-        .text_color(theme::text_faint())
+        .text_color(theme::text_muted())
         .child(format!(
             "{} words   {} WPM   {}",
             app.session.words,

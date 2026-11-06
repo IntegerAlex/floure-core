@@ -1,4 +1,5 @@
 mod app;
+mod assets;
 mod control_server;
 mod hotkeys;
 mod theme;
@@ -17,6 +18,12 @@ use floure_core::{Engine, Paths, migrate};
 use hotkeys::HotkeyStatus;
 
 fn main() {
+    // Cap OpenMP before llama.cpp creates its pool. The GPU compositor needs
+    // headroom; all-core inference is what got the old app marked unresponsive.
+    let threads = floure_core::compute::inference_threads();
+    // SAFETY: called before any other thread exists.
+    unsafe { std::env::set_var("OMP_NUM_THREADS", threads.to_string()) };
+
     if handle_cli() {
         return;
     }
@@ -32,6 +39,13 @@ fn main() {
         eprintln!("[migrate] {error}");
     }
     let config = AppConfig::load();
+    let data_dir = floure_core::config::data_dir();
+    if let Err(error) = std::fs::create_dir_all(&data_dir) {
+        eprintln!("[data] {}: {error}", data_dir.display());
+    }
+    if let Err(error) = std::fs::create_dir_all(&config.model_dir) {
+        eprintln!("[models] {}: {error}", config.model_dir.display());
+    }
 
     let engine = match Engine::new(config.clone(), Paths::from_config(&config)) {
         Ok(engine) => Some(Arc::new(engine)),
@@ -58,11 +72,22 @@ fn main() {
     }
 
     gpui_platform::application()
-        .with_quit_mode(QuitMode::Explicit)
+        .with_assets(assets::Assets)
+        .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx: &mut App| {
+            if let Err(error) = cx.text_system().add_fonts(vec![assets::font()]) {
+                eprintln!("[fonts] {error}");
+            }
             gpui_component::init(cx);
             apply_component_theme(cx);
             cx.bind_keys(app::key_bindings());
+            if let Some(engine) = engine.clone() {
+                cx.on_app_quit(move |_| {
+                    engine.stop_blocking();
+                    async {}
+                })
+                .detach();
+            }
 
             let bounds = Bounds::centered(None, size(px(960.), px(700.)), cx);
             let config = config.clone();

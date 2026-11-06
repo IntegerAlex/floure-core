@@ -8,7 +8,6 @@ use gpui_component::input::Input;
 
 use crate::app::FloureApp;
 use crate::theme;
-use floure_core::History;
 
 const MODES: [(&str, &str); 5] = [
     ("cleanup", "Cleanup"),
@@ -263,14 +262,16 @@ fn rows(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             .into_any_element();
     }
 
-    let (today, yesterday) =
-        History::new(floure_core::config::history_db_path()).today_and_yesterday();
+    let today = app.history_today.clone();
+    let yesterday = app.history_yesterday.clone();
     let mut list = div()
+        .id("history-rows")
         .flex()
         .flex_col()
         .flex_1()
+        .min_h_0()
         .mt(theme::SPACE_4)
-        .overflow_hidden();
+        .overflow_y_scroll();
     let mut current_day = String::new();
     for row in &app.history {
         let day = row
@@ -356,7 +357,7 @@ fn row_view(
                 .flex_shrink_0()
                 .text_size(theme::TEXT_XS)
                 .font_features(theme::tabular())
-                .text_color(theme::text_faint())
+                .text_color(theme::text_muted())
                 .child(time),
         )
         .child(body)
@@ -365,45 +366,69 @@ fn row_view(
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(theme::SPACE_3)
+                .gap(px(2.0))
                 .flex_shrink_0()
-                .child(text_action(
+                .child(icon_action(
                     SharedString::from(format!("favorite-{id}")),
-                    if favorite { "Starred" } else { "Star" },
+                    if favorite { "star-filled" } else { "star" },
+                    if favorite {
+                        "Unstar transcript"
+                    } else {
+                        "Star transcript"
+                    },
                     if favorite {
                         theme::text()
                     } else {
-                        theme::text_faint()
+                        theme::text_muted()
                     },
                     cx.listener(move |this, _, _, cx| {
                         this.set_favorite(id, !favorite);
                         cx.notify();
                     }),
                 ))
-                .child(text_action(
+                .child(icon_action(
                     SharedString::from(format!("copy-{id}")),
-                    "Copy",
-                    theme::text_faint(),
+                    "copy",
+                    "Copy transcript",
+                    theme::text_muted(),
                     cx.listener(move |this, _, _, cx| {
                         this.copy_row(&text);
                         cx.notify();
                     }),
                 ))
                 .when(can_expand, |this| {
-                    this.child(text_action(
+                    this.child(icon_action(
                         SharedString::from(format!("expand-{id}")),
-                        if expanded { "Clean" } else { "Raw" },
-                        theme::text_faint(),
+                        if expanded {
+                            "chevron-up"
+                        } else {
+                            "chevron-down"
+                        },
+                        if expanded {
+                            "Hide original transcript"
+                        } else {
+                            "Show original transcript"
+                        },
+                        theme::text_muted(),
                         cx.listener(move |this, _, _, cx| {
                             this.toggle_expanded(id);
                             cx.notify();
                         }),
                     ))
                 })
-                .child(text_action(
+                .child(icon_action(
                     SharedString::from(format!("delete-{id}")),
-                    "Delete",
-                    theme::text_faint(),
+                    "trash-2",
+                    if app.history_confirm_row == Some(id) {
+                        "Confirm delete"
+                    } else {
+                        "Delete transcript"
+                    },
+                    if app.history_confirm_row == Some(id) {
+                        theme::error()
+                    } else {
+                        theme::text_muted()
+                    },
                     cx.listener(move |this, _, _, cx| {
                         this.delete_history_row(id);
                         cx.notify();
@@ -519,8 +544,9 @@ fn checkbox(
         .into_any_element()
 }
 
-fn text_action(
+fn icon_action(
     id: SharedString,
+    icon: &'static str,
     label: &'static str,
     color: gpui::Rgba,
     listener: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
@@ -529,15 +555,15 @@ fn text_action(
         .id(id)
         .role(gpui::Role::Button)
         .aria_label(label)
-        .px(px(6.0))
-        .py(px(2.0))
-        .rounded(px(5.0))
-        .text_size(theme::TEXT_XS)
-        .text_color(color)
+        .size(px(28.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.0))
         .cursor_pointer()
-        .hover(|style| style.bg(theme::raised()).text_color(theme::text()))
+        .hover(|style| style.bg(theme::raised()))
         .on_click(listener)
-        .child(label)
+        .child(theme::icon(icon, px(15.0), color))
         .into_any_element()
 }
 
@@ -565,6 +591,7 @@ fn button(
             theme::text_secondary()
         })
         .cursor_pointer()
+        .hover(|style| style.bg(theme::raised()))
         .when(!disabled, |this| this.on_click(listener))
         .child(label.to_string())
         .into_any_element()

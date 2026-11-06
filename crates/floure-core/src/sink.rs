@@ -21,6 +21,9 @@ pub struct EventSink {
     /// Keeps the channel active when no UI subscriber is attached yet.
     _keepalive: Arc<InactiveReceiver<EngineEvent>>,
     state: Arc<AtomicU8>,
+    /// One counter for the process, not one per press: the UI matches cleanup
+    /// events to transcript lines by id, so ids must never repeat across runs.
+    utterance_id: Arc<AtomicU64>,
 }
 
 impl EventSink {
@@ -34,6 +37,7 @@ impl EventSink {
                 tx,
                 _keepalive: keepalive,
                 state: Arc::new(AtomicU8::new(EngineState::Idle as u8)),
+                utterance_id: Arc::new(AtomicU64::new(0)),
             },
             rx,
         )
@@ -69,7 +73,7 @@ impl EventSink {
     pub fn app_handle(&self) -> AppHandle {
         AppHandle {
             sink: self.clone(),
-            utterance_id: Arc::new(AtomicU64::new(0)),
+            utterance_id: self.utterance_id.clone(),
         }
     }
 }

@@ -60,14 +60,17 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
         END;",
     )?;
 
-    // Backfill rows written before the FTS table existed. The triggers keep
-    // new writes current; this is safe to run on every open.
-    conn.execute(
-        "INSERT INTO transcripts_fts(rowid, raw_text, processed_text)
-         SELECT id, raw_text, processed_text FROM transcripts
-         WHERE id NOT IN (SELECT rowid FROM transcripts_fts)",
-        [],
-    )?;
+    // Backfill rows written before the FTS table existed exactly once. The
+    // triggers keep new writes current, and running a full-table anti-join on
+    // every connection makes search slower as history grows.
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 1 {
+        conn.execute(
+            "INSERT INTO transcripts_fts(transcripts_fts) VALUES('rebuild')",
+            [],
+        )?;
+        conn.pragma_update(None, "user_version", 1)?;
+    }
     Ok(())
 }
 
@@ -176,7 +179,7 @@ pub fn search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Transc
     let mut stmt = conn.prepare(
         "SELECT t.id, t.raw_text, t.processed_text, t.language, t.mode, t.model,
                 t.duration_sec, t.favorite, t.created_at
-         FROM transcripts_fts f JOIN transcripts t ON t.id = f.rowid
+         FROM transcripts_fts JOIN transcripts t ON t.id = transcripts_fts.rowid
          WHERE transcripts_fts MATCH ?1
          ORDER BY rank LIMIT ?2",
     )?;
@@ -237,9 +240,25 @@ mod tests {
     }
 
     #[test]
-    fn schema_is_idempotent() {
-        let conn = db();
+    fn schema_is_idempotent_and_backfills_once() {
+        let conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO transcripts(raw_text, processed_text) VALUES ('prefts row', 'prefts row')",
+            [],
+        )
+        .unwrap();
+        // Simulate a legacy database whose index was never built, then let the
+        // one-shot backfill repair it.
+        conn.execute("DROP TABLE transcripts_fts", []).unwrap();
+        conn.pragma_update(None, "user_version", 0).unwrap();
         ensure_schema(&conn).unwrap();
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(search(&conn, "prefts", 10).unwrap().len(), 1);
+        ensure_schema(&conn).unwrap();
+        assert_eq!(search(&conn, "prefts", 10).unwrap().len(), 1);
     }
 }

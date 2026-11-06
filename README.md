@@ -74,7 +74,7 @@ re-run from Configuration → General.
 
 | Platform | How to start and stop |
 |---|---|
-| Linux X11 | Configurable global shortcut (default `Ctrl+Shift+F12`), hold or toggle |
+| Linux X11 | Global shortcut (default `Ctrl+Shift+F12`), hold or toggle |
 | Linux Wayland | Bind `floure --toggle` in your compositor, use the tray, or POST to the loopback server |
 | Any | Tray menu (`Start recording` / `Stop recording`), or the microphone button in the window |
 
@@ -167,5 +167,8 @@ retires. It is not part of the build, CI, or release path.
 
 ## License
 
-GPL-3.0-or-later. The repository was relicensed from GPL-2.0-only because GPUI
-and gpui-component are Apache-2.0-only; see `docs/adr/0006-license.md`.
+GPL-3.0-or-later (see `LICENSE`). The repository was relicensed from GPL-2.0-only
+because GPUI and gpui-component are Apache-2.0-only; see
+`docs/adr/0006-license.md`. The bundled Inter typeface is licensed under the
+SIL Open Font License; its licence ships in the packages and at
+`crates/floure-app/assets/fonts/OFL.txt`.

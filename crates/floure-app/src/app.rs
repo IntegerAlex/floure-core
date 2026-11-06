@@ -164,6 +164,7 @@ pub struct FloureApp {
     pub recording: bool,
     pub status: RunState,
     pub utterances: Vec<Utterance>,
+    pub transcript_copied: bool,
     pub session: Session,
     pub mic_level: f32,
     pub reduce_motion: bool,
@@ -176,6 +177,9 @@ pub struct FloureApp {
     pub history_limit: usize,
     pub history_selected: HashSet<i64>,
     pub history_expanded: HashSet<i64>,
+    pub history_confirm_row: Option<i64>,
+    pub history_today: String,
+    pub history_yesterday: String,
     pub history_confirm_delete: Option<usize>,
     pub history_notice: Option<String>,
     pub search_input: Entity<InputState>,
@@ -218,6 +222,7 @@ impl FloureApp {
             Err(error) => (Vec::new(), Some(error.to_string())),
         };
         let insights = InsightsRepo::new(&db).summary().ok();
+        let (history_today, history_yesterday) = History::new(&db).today_and_yesterday();
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
@@ -264,6 +269,7 @@ impl FloureApp {
                 RunState::Idle
             },
             utterances: Vec::new(),
+            transcript_copied: false,
             session: Session::default(),
             mic_level: 0.0,
             reduce_motion: detect_reduce_motion(),
@@ -276,6 +282,9 @@ impl FloureApp {
             history_limit: 50,
             history_selected: HashSet::new(),
             history_expanded: HashSet::new(),
+            history_confirm_row: None,
+            history_today,
+            history_yesterday,
             history_confirm_delete: None,
             history_notice: None,
             search_input,
@@ -372,13 +381,9 @@ impl FloureApp {
         match event {
             EngineEvent::State(state) => {
                 self.status = RunState::from_engine(state);
-                self.recording = matches!(
-                    state,
-                    EngineState::Listening | EngineState::Transcribing | EngineState::Rewriting
-                );
-                if matches!(state, EngineState::Idle | EngineState::Stopped) {
-                    self.recording = false;
-                }
+                // `recording` means the microphone is open, nothing else.
+                // Transcribing and rewriting happen after stop too.
+                self.recording = state == EngineState::Listening;
             }
             EngineEvent::MicLevel(level) => self.mic_level = level,
             EngineEvent::Final {
@@ -387,7 +392,7 @@ impl FloureApp {
                 duration_sec,
                 ..
             } => {
-                self.recording = true;
+                self.transcript_copied = false;
                 self.session.speech_secs += duration_sec.max(0.0);
                 self.session.words += text.split_whitespace().count();
                 self.utterances.push(Utterance {
@@ -510,9 +515,16 @@ impl FloureApp {
         self.utterances.iter_mut().find(|line| line.id == id)
     }
 
-    pub fn copy_latest(&mut self) {
-        if let Some(line) = self.utterances.last() {
-            let _ = copy_to_clipboard(line.text());
+    pub fn copy_transcript(&mut self) {
+        let start = self.utterances.len().saturating_sub(4);
+        let text = self.utterances[start..]
+            .iter()
+            .map(Utterance::text)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if !text.is_empty() {
+            let _ = copy_to_clipboard(&text);
+            self.transcript_copied = true;
         }
     }
 
@@ -527,6 +539,7 @@ impl FloureApp {
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.utterances.clear();
+        self.transcript_copied = false;
         self.session = Session::default();
         cx.notify();
     }
@@ -563,6 +576,11 @@ impl FloureApp {
     pub fn refresh_history(&mut self) {
         let db = floure_core::config::history_db_path();
         let repo = History::new(&db);
+        let (today, yesterday) = repo.today_and_yesterday();
+        if !today.is_empty() {
+            self.history_today = today;
+            self.history_yesterday = yesterday;
+        }
         let query = self.history_query.trim();
         let result = if query.is_empty() {
             repo.recent(self.history_limit)
@@ -605,6 +623,7 @@ impl FloureApp {
             self.history_selected.remove(&id);
         }
         self.history_confirm_delete = None;
+        self.history_confirm_row = None;
     }
 
     pub fn toggle_expanded(&mut self, id: i64) {
@@ -619,10 +638,17 @@ impl FloureApp {
         self.refresh_history();
     }
 
+    /// Two-step delete: the first click arms, the second deletes. A transcript
+    /// is not recoverable, so a single stray click must not destroy one.
     pub fn delete_history_row(&mut self, id: i64) {
+        if self.history_confirm_row != Some(id) {
+            self.history_confirm_row = Some(id);
+            return;
+        }
         let db = floure_core::config::history_db_path();
         let _ = History::new(&db).delete(&[id]);
         self.history_selected.remove(&id);
+        self.history_confirm_row = None;
         self.refresh_history();
         self.insights = InsightsRepo::new(&db).summary().ok();
     }
@@ -911,6 +937,21 @@ impl FloureApp {
         cx.notify();
     }
 
+    pub fn rerun_setup(&mut self, cx: &mut Context<Self>) {
+        self.config.onboarding_completed = false;
+        self.onboarding_step = 0;
+        self.save_config_now();
+        cx.notify();
+    }
+
+    pub fn discard_config(&mut self, cx: &mut Context<Self>) {
+        self.config = AppConfig::load();
+        self.config_dirty = false;
+        self.config_error = None;
+        self.config_notice = Some("Staged changes discarded".to_string());
+        cx.notify();
+    }
+
     pub fn complete_onboarding(&mut self, cx: &mut Context<Self>) {
         self.config.onboarding_completed = true;
         self.save_config_now();
@@ -936,7 +977,10 @@ impl FloureApp {
             cx.notify();
             return;
         };
-        if self.recording {
+        if engine.state() == EngineState::Stopping {
+            return;
+        }
+        if engine.state() == EngineState::Listening {
             self.recording = false;
             self.status = RunState::Stopping;
             engine.stop();
@@ -964,6 +1008,15 @@ impl FloureApp {
     }
 
     fn on_quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
+        self.quit(cx);
+    }
+
+    pub fn quit(&mut self, cx: &mut Context<Self>) {
+        // Flush the tail before the process exits; the engine may be recording
+        // even when the window is not the focused surface.
+        if let Some(engine) = &self.engine {
+            engine.stop_blocking();
+        }
         cx.quit();
     }
 }
@@ -1236,7 +1289,7 @@ fn nav_item(destination: Destination, active: bool) -> gpui::Stateful<gpui::Div>
         .justify_center()
         .rounded(theme::RADIUS_CONTROL)
         .cursor_pointer()
-        .hover(|style| style.bg(theme::surface()));
+        .hover(|style| style.bg(theme::hover()));
     if active {
         item = item.bg(theme::raised());
     }

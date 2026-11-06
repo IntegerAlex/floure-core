@@ -10,9 +10,12 @@ use crate::theme;
 
 pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
     div()
+        .id("onboarding")
         .flex()
         .flex_col()
         .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
         .px(theme::GUTTER)
         .pt(theme::SPACE_8)
         .pb(theme::SPACE_6)
@@ -31,7 +34,7 @@ pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                 .child(
                     div()
                         .text_size(theme::TEXT_SM)
-                        .text_color(theme::text_faint())
+                        .text_color(theme::text_muted())
                         .child(format!("Step {} of 3", app.onboarding_step + 1)),
                 )
                 .child(progress(app.onboarding_step)),
@@ -142,7 +145,7 @@ fn models(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                         .child(
                             div()
                                 .text_size(theme::TEXT_XS)
-                                .text_color(theme::text_faint())
+                                .text_color(theme::text_muted())
                                 .child(format!(
                                     "{}{}",
                                     model.backend,
@@ -189,7 +192,7 @@ fn ready(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             div()
                 .mt(theme::SPACE_3)
                 .text_size(theme::TEXT_XS)
-                .text_color(theme::text_faint())
+                .text_color(theme::text_muted())
                 .child("Add `bind = SUPER, D, exec, floure --toggle` to your Hyprland config, or use the tray."),
         );
     }
@@ -341,7 +344,7 @@ fn button_enabled(
         .text_color(if enabled {
             theme::text_secondary()
         } else {
-            theme::text_faint()
+            theme::text_muted()
         });
     if enabled {
         button = button.cursor_pointer().on_click(listener);

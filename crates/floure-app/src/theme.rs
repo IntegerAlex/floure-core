@@ -3,26 +3,27 @@
 //! One ground, one accent. Nothing here should be changed per-screen: if a
 //! screen needs a new colour, it is the wrong colour.
 
-use gpui::{FontWeight, Pixels, px, rgb, rgba};
+use gpui::{FontWeight, Pixels, Styled as _, px, rgb, rgba};
 
 // Ground and surfaces.
 pub const BG: u32 = 0x000000;
-pub const SURFACE: u32 = 0x0A0A0A;
-pub const RAISED: u32 = 0x141414;
-/// 10% white. Borders are never a solid grey: they must sit on any surface.
-pub const BORDER: u32 = 0xFFFFFF1A;
+pub const SURFACE: u32 = 0x0C0C0E;
+pub const RAISED: u32 = 0x17171A;
+/// 12% white. Borders are never a solid grey: they must sit on any surface.
+pub const BORDER: u32 = 0xFFFFFF1F;
+pub const BORDER_STRONG: u32 = 0xFFFFFF3D;
 
 // Text.
-pub const TEXT: u32 = 0xF5F5F7;
-pub const TEXT_SECONDARY: u32 = 0xA1A1A6;
-/// ≥4.5:1 on black. The only muted tone body text may use.
-pub const TEXT_MUTED: u32 = 0x8E8E93;
-/// Decorative/large text only (17 px and up).
-pub const TEXT_FAINT: u32 = 0x6E6E73;
+pub const TEXT: u32 = 0xF7F7F8;
+pub const TEXT_SECONDARY: u32 = 0xC2C2C7;
+/// ≥4.5:1 on both black and the panel surface. Body and metadata text.
+pub const TEXT_MUTED: u32 = 0x9A9AA1;
+/// Decorative/large text only; never body copy.
+pub const TEXT_FAINT: u32 = 0x8E8E93;
 
 // Semantic. Accent is reserved for recording and live data.
 pub const ACCENT: u32 = 0xFF453A;
-pub const ERROR: u32 = 0xFF6961;
+pub const ERROR: u32 = 0xFF6B63;
 
 // Type scale.
 pub const TEXT_XS: Pixels = px(12.0);
@@ -54,6 +55,22 @@ pub const FONT_FAMILY: &str = "Inter";
 
 pub fn border() -> gpui::Rgba {
     rgba(BORDER)
+}
+
+pub fn border_strong() -> gpui::Rgba {
+    rgba(BORDER_STRONG)
+}
+
+pub fn hover() -> gpui::Rgba {
+    rgba(0xFFFFFF12)
+}
+
+/// A bundled Lucide icon, tinted by the current text colour.
+pub fn icon(name: &str, size: Pixels, color: gpui::Rgba) -> impl gpui::IntoElement {
+    gpui::svg()
+        .path(format!("icons/{name}.svg"))
+        .size(size)
+        .text_color(color)
 }
 
 pub fn ground() -> gpui::Rgba {
@@ -140,6 +157,14 @@ mod tests {
     fn primary_and_secondary_text_are_high_contrast() {
         assert!(contrast(TEXT, BG) >= 7.0);
         assert!(contrast(TEXT_SECONDARY, BG) >= 7.0);
+        assert!(contrast(TEXT_SECONDARY, SURFACE) >= 7.0);
+    }
+
+    #[test]
+    fn metadata_text_passes_on_every_surface_it_sits_on() {
+        assert!(contrast(TEXT_MUTED, BG) >= 4.5);
+        assert!(contrast(TEXT_MUTED, SURFACE) >= 4.5);
+        assert!(contrast(TEXT_MUTED, RAISED) >= 4.5);
     }
 
     #[test]

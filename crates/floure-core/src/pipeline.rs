@@ -212,9 +212,10 @@ impl LlmProcessor {
         text: &str,
         timestamps: &[f32],
         durations: &[f32],
+        run_id: u64,
         app: &crate::sink::AppHandle,
     ) {
-        if CANCELLED.load(Ordering::SeqCst) {
+        if CANCELLED.load(Ordering::SeqCst) || !run_is_current(run_id) {
             return;
         }
         let mode = self.config.llm_mode;
@@ -278,8 +279,9 @@ impl LlmProcessor {
         let cleaned = cleaned.trim().to_string();
         let _ = app.emit("cleanup_done", serde_json::json!({ "text": cleaned }));
 
-        // A cancel during a long cleanup pass must not type the result.
-        if CANCELLED.load(Ordering::SeqCst) {
+        // A cancel or a newer run during a long cleanup pass must not type
+        // or save the result.
+        if CANCELLED.load(Ordering::SeqCst) || !run_is_current(run_id) {
             return;
         }
 
@@ -361,7 +363,15 @@ impl LlmProcessor {
             Ok(history_id) => {
                 let _ = app.emit("committed", serde_json::json!({ "history_id": history_id }));
             }
-            Err(e) => eprintln!("[pipeline] history save failed: {e}"),
+            Err(e) => {
+                eprintln!("[pipeline] history save failed: {e}");
+                let _ = app.emit(
+                    "output_error",
+                    serde_json::json!({
+                        "error": format!("The transcript could not be saved to history: {e}")
+                    }),
+                );
+            }
         }
     }
 }
@@ -374,6 +384,7 @@ fn transcribe_segment(
     whisper: &Option<WhisperRecognizer>,
     hotwords: &str,
     llm_processor: &mut LlmProcessor,
+    run_id: u64,
     app: &crate::sink::AppHandle,
 ) {
     let start = Instant::now();
@@ -408,8 +419,8 @@ fn transcribe_segment(
     if text.trim().is_empty() {
         return;
     }
-    // Cancelled while the decoder was busy: drop the result on the floor.
-    if CANCELLED.load(Ordering::SeqCst) {
+    // Cancelled or superseded while the decoder was busy: drop the result.
+    if CANCELLED.load(Ordering::SeqCst) || !run_is_current(run_id) {
         return;
     }
     let _ = app.emit(
@@ -420,7 +431,7 @@ fn transcribe_segment(
             "duration_sec": segment.len() as f64 / 16000.0,
         }),
     );
-    llm_processor.process(&text, &timestamps, &durations, app);
+    llm_processor.process(&text, &timestamps, &durations, run_id, app);
 }
 
 /// Build ASR recognizers for this config. Returns the pair plus whether the
@@ -768,7 +779,7 @@ impl PipelineController {
                     serde_json::json!({"error": format!("Audio device error: {}", e)}),
                 );
                 running_clone.store(false, Ordering::SeqCst);
-                return Ok(());
+                return Err(anyhow::anyhow!("audio device: {e}"));
             }
         };
 
@@ -877,6 +888,7 @@ impl PipelineController {
                         &whisper,
                         &config_clone.hotwords,
                         &mut llm_processor,
+                        run_id,
                         &app_clone,
                     );
                 }
@@ -1121,7 +1133,8 @@ mod cancel_tests {
         let (sink, mut rx) = crate::sink::EventSink::new();
         let app = sink.app_handle();
         let mut processor = LlmProcessor::from_cached(AppConfig::default(), None);
-        processor.process("hello world", &[], &[], &app);
+        let run_id = begin_run();
+        processor.process("hello world", &[], &[], run_id, &app);
 
         assert!(rx.try_recv().is_err(), "cancelled audio must stay silent");
         assert!(

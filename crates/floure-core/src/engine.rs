@@ -68,6 +68,9 @@ impl Engine {
     }
 
     pub fn start(&self) -> Result<()> {
+        if self.state() == EngineState::Stopping {
+            bail!("still stopping — try again");
+        }
         if self.started.swap(true, Ordering::SeqCst) {
             bail!("recording already running");
         }
@@ -101,8 +104,13 @@ impl Engine {
         let sink = self.sink.clone();
         std::thread::spawn(move || {
             crate::pipeline::stop_pipeline();
-            sink.send(EngineEvent::State(EngineState::Idle));
-            sink.send(EngineEvent::Stopped { flushed: true });
+            // A newer press may already have started while this join ran.
+            // Its Listening state owns the UI now; emitting Idle here would
+            // make the button lie about an open microphone.
+            if sink.state() != EngineState::Listening {
+                sink.send(EngineEvent::State(EngineState::Idle));
+                sink.send(EngineEvent::Stopped { flushed: true });
+            }
         });
     }
 
