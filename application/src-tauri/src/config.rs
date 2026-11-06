@@ -204,7 +204,7 @@ fn default_true() -> bool {
 
 /// Config directory for `floure/config.json`
 /// (`~/.config/floure`, `%APPDATA%/floure`, ...).
-fn config_dir() -> PathBuf {
+pub(crate) fn config_dir() -> PathBuf {
     dirs_next::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("floure")

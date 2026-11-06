@@ -13,6 +13,7 @@ pub mod events;
 pub mod history;
 pub mod insights;
 pub mod llm;
+pub mod migrate;
 pub mod models;
 pub mod output;
 pub mod parakeet;

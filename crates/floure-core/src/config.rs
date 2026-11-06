@@ -35,6 +35,14 @@ pub enum LlmProvider {
     OpenRouter,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PttMode {
+    #[default]
+    Hold,
+    Toggle,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub asr_profile: AsrProfile,
@@ -61,6 +69,29 @@ pub struct AppConfig {
     #[serde(default)]
     pub hotwords: String,
     pub model_dir: PathBuf,
+
+    // ---- Migrated from the Tauri webview's localStorage ----
+    /// Global shortcut in the frontend's `CommandOrControl+Shift+F12` format.
+    #[serde(default = "default_hotkey")]
+    pub hotkey: String,
+    /// Hold-to-talk or tap-to-toggle.
+    #[serde(default)]
+    pub ptt_mode: PttMode,
+    #[serde(default = "default_true")]
+    pub sound_enabled: bool,
+    /// 0..1 gain for the PTT blips.
+    #[serde(default = "default_volume")]
+    pub sound_volume: f32,
+    #[serde(default)]
+    pub onboarding_completed: bool,
+}
+
+fn default_hotkey() -> String {
+    "CommandOrControl+Shift+F12".to_string()
+}
+
+fn default_volume() -> f32 {
+    1.0
 }
 
 fn default_language() -> String {
@@ -105,6 +136,11 @@ impl Default for AppConfig {
             clipboard_enabled: true,
             hotwords: String::new(),
             model_dir,
+            hotkey: default_hotkey(),
+            ptt_mode: PttMode::Hold,
+            sound_enabled: true,
+            sound_volume: 1.0,
+            onboarding_completed: false,
         }
     }
 }
@@ -215,7 +251,11 @@ fn config_dir() -> PathBuf {
 /// Honors the `STT_DATA_DIR` env override (used by the Python backend);
 /// otherwise `~/.local/share/floure`.
 pub fn data_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("STT_DATA_DIR") {
+    data_dir_with(std::env::var("STT_DATA_DIR").ok())
+}
+
+fn data_dir_with(override_dir: Option<String>) -> PathBuf {
+    if let Some(dir) = override_dir {
         PathBuf::from(dir)
     } else {
         dirs_next::home_dir()
@@ -256,10 +296,14 @@ pub fn history_db_path() -> PathBuf {
 
 impl AppConfig {
     pub fn load() -> Self {
-        let store_path = config_dir().join("config.json");
+        Self::load_at(&config_dir().join("config.json"))
+    }
 
-        if store_path.exists()
-            && let Ok(contents) = std::fs::read_to_string(&store_path)
+    /// Read the config at an explicit path. Used by migrations and tests so
+    /// the bridge never touches the real user directory.
+    pub fn load_at(path: &std::path::Path) -> Self {
+        if path.exists()
+            && let Ok(contents) = std::fs::read_to_string(path)
             && let Ok(config) = serde_json::from_str::<AppConfig>(&contents)
         {
             return config;
@@ -268,12 +312,15 @@ impl AppConfig {
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
-        let store_path = config_dir();
+        self.save_at(&config_dir().join("config.json"))
+    }
 
-        std::fs::create_dir_all(&store_path)?;
-        let config_path = store_path.join("config.json");
+    pub fn save_at(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(&config_path, json)?;
+        std::fs::write(path, json)?;
         Ok(())
     }
 
@@ -317,6 +364,24 @@ mod tests {
         assert_eq!(config.language, "en");
         // Same for configs predating `hotwords`.
         assert!(config.hotwords.is_empty());
+        // And predating the webview-settings migration.
+        assert_eq!(config.hotkey, "CommandOrControl+Shift+F12");
+        assert_eq!(config.ptt_mode, super::PttMode::Hold);
+        assert!(config.sound_enabled);
+        assert!((config.sound_volume - 1.0).abs() < 1e-6);
+        assert!(!config.onboarding_completed);
+    }
+
+    #[test]
+    fn data_paths_are_literal_and_overrideable() {
+        assert_eq!(
+            super::data_dir_with(Some("/tmp/stt-data".into())),
+            std::path::PathBuf::from("/tmp/stt-data")
+        );
+        assert!(
+            super::data_dir_with(None).ends_with(".local/share/floure"),
+            "the canonical data dir must keep the literal floure path"
+        );
     }
 
     #[test]
