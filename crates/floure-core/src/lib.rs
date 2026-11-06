@@ -28,7 +28,7 @@ pub use events::{EngineEvent, EngineState};
 pub use history::{History, TranscriptRow};
 pub use insights::{
     HeatmapDay, Insights, InsightsCategory, InsightsRepo, InsightsStreak, VoiceIntelligence,
-    WeeklyWordDay,
+    WeekWords,
 };
 pub use migrate::{MigrationReport, migrate};
 

@@ -42,7 +42,7 @@ pub fn render(app: &FloureApp, _cx: &mut Context<FloureApp>) -> AnyElement {
 fn figures(insights: &Insights) -> AnyElement {
     let items = [
         ("WORDS THIS WEEK", insights.words_this_week.to_string()),
-        ("TOTAL WORDS", insights.total_words.to_string()),
+        ("SESSIONS", insights.sessions.to_string()),
         ("CURRENT STREAK", format!("{} d", insights.streak.current)),
         ("AVERAGE WPM", insights.wpm.to_string()),
     ];
@@ -72,29 +72,55 @@ fn figures(insights: &Insights) -> AnyElement {
 }
 
 fn streak_sentence(insights: &Insights) -> AnyElement {
-    let sentence = if insights.total_words == 0 {
-        "Your first session will appear here.".to_string()
-    } else if insights.words_this_week == 0 {
-        "Nothing dictated this week yet.".to_string()
-    } else {
-        let sessions = insights.heatmap.iter().filter(|d| d.level > 0).count();
-        format!(
-            "{} {} this week across {} {}.",
-            insights.words_this_week,
-            if insights.words_this_week == 1 {
-                "word"
-            } else {
-                "words"
-            },
-            sessions,
-            if sessions == 1 { "session" } else { "sessions" }
-        )
-    };
     div()
         .text_size(theme::TEXT_BASE)
         .text_color(theme::text_secondary())
-        .child(sentence)
+        .child(finding_sentence(insights))
         .into_any_element()
+}
+
+pub fn finding_sentence(insights: &Insights) -> String {
+    finding_text(
+        insights.total_words,
+        insights.words_this_week,
+        insights.words_previous_week,
+        insights.previous_week_sessions,
+    )
+}
+
+/// A comparison needs at least three prior-week sessions; below that the
+/// percentage is noise and the sentence stays neutral.
+fn finding_text(
+    total_words: i64,
+    words_this_week: i64,
+    words_previous_week: i64,
+    previous_week_sessions: i64,
+) -> String {
+    if total_words == 0 {
+        return "Your first session will appear here.".to_string();
+    }
+    if words_this_week == 0 {
+        return "Nothing dictated this week yet.".to_string();
+    }
+    let words = format!(
+        "{} {}",
+        words_this_week,
+        if words_this_week == 1 {
+            "word"
+        } else {
+            "words"
+        }
+    );
+    if previous_week_sessions >= 3 && words_previous_week > 0 {
+        let delta =
+            (words_this_week - words_previous_week) as f64 / words_previous_week as f64 * 100.0;
+        let direction = if delta >= 0.0 { "more" } else { "less" };
+        return format!(
+            "You dictated {words} this week, {:.0}% {direction} than last week.",
+            delta.abs()
+        );
+    }
+    format!("You dictated {words} this week.")
 }
 
 fn heatmap(insights: &Insights) -> AnyElement {
@@ -124,30 +150,27 @@ fn heatmap(insights: &Insights) -> AnyElement {
 }
 
 fn weekly_bars(insights: &Insights) -> AnyElement {
-    let max = insights
-        .weekly_words
-        .iter()
-        .map(|d| d.words)
-        .max()
-        .unwrap_or(0)
-        .max(1);
+    let raw_max = insights.weeks.iter().map(|d| d.words).max().unwrap_or(0);
+    let max = raw_max.max(1);
     let mut row = div()
         .flex()
         .flex_row()
         .items_end()
-        .gap(theme::SPACE_3)
-        .h(px(96.0));
-    for day in &insights.weekly_words {
-        let height = ((day.words as f32 / max as f32) * 88.0).max(2.0);
+        .gap(theme::SPACE_2)
+        .h(px(104.0));
+    for week in &insights.weeks {
+        let height = ((week.words as f32 / max as f32) * 88.0).max(2.0);
         row = row.child(
             div()
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap(theme::SPACE_1)
+                .w(px(28.0))
+                .flex_shrink_0()
                 .child(
                     div()
-                        .w(px(18.0))
+                        .w_full()
                         .h(px(height))
                         .rounded(px(2.0))
                         .bg(theme::text_secondary()),
@@ -156,9 +179,48 @@ fn weekly_bars(insights: &Insights) -> AnyElement {
                     div()
                         .text_size(theme::TEXT_XS)
                         .text_color(theme::text_faint())
-                        .child(day.label.clone()),
+                        .child(week.label.clone()),
                 ),
         );
     }
-    row.into_any_element()
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme::SPACE_2)
+        .child(
+            div()
+                .text_size(theme::TEXT_XS)
+                .text_color(theme::text_faint())
+                .child(format!("12 weeks · max {raw_max} words")),
+        )
+        .child(row)
+        .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comparison_requires_three_prior_sessions() {
+        assert_eq!(
+            finding_text(200, 120, 100, 2),
+            "You dictated 120 words this week."
+        );
+        assert!(finding_text(200, 120, 100, 3).contains("20% more"));
+        assert!(finding_text(200, 80, 100, 3).contains("20% less"));
+    }
+
+    #[test]
+    fn finding_sentence_handles_empty_and_zero_weeks() {
+        assert_eq!(
+            finding_text(0, 0, 0, 0),
+            "Your first session will appear here."
+        );
+        assert_eq!(
+            finding_text(50, 0, 10, 3),
+            "Nothing dictated this week yet."
+        );
+        assert_eq!(finding_text(50, 1, 0, 0), "You dictated 1 word this week.");
+    }
 }

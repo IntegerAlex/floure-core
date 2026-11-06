@@ -11,6 +11,12 @@ use serde::Serialize;
 
 const WORD_COUNT: &str = "(LENGTH(raw_text) - LENGTH(REPLACE(raw_text, ' ', '')) + 1)";
 
+/// Monday 00:00 local, converted to UTC for comparison with stored
+/// `created_at` values. `weekday 1` alone moves *forward* to Monday, so the
+/// -6 days step makes it this week's Monday.
+const WEEK_START: &str =
+    "datetime('now', 'localtime', '-6 days', 'weekday 1', 'start of day', 'utc')";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InsightsCategory {
@@ -35,7 +41,7 @@ pub struct HeatmapDay {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WeeklyWordDay {
+pub struct WeekWords {
     pub label: String,
     pub words: i64,
 }
@@ -47,12 +53,15 @@ pub struct Insights {
     pub wpm_trend: i64,
     pub total_words: i64,
     pub words_this_week: i64,
+    pub words_previous_week: i64,
     pub words_trend: i64,
+    pub sessions: i64,
+    pub previous_week_sessions: i64,
     pub ai_fixes: i64,
     pub categories: Vec<InsightsCategory>,
     pub streak: InsightsStreak,
     pub heatmap: Vec<HeatmapDay>,
-    pub weekly_words: Vec<WeeklyWordDay>,
+    pub weeks: Vec<WeekWords>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +94,7 @@ impl InsightsRepo {
 
     pub fn summary(&self) -> Result<Insights> {
         let conn = self.conn()?;
+        let week_start = WEEK_START;
         let one = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
 
         let total_words = one(&format!(
@@ -92,12 +102,17 @@ impl InsightsRepo {
         ));
         let words_this_week = one(&format!(
             "SELECT COALESCE(SUM({WORD_COUNT}), 0) FROM transcripts
-             WHERE raw_text != '' AND created_at >= datetime('now', '-7 days')"
+             WHERE raw_text != '' AND created_at >= {week_start}"
         ));
         let words_prev_week = one(&format!(
             "SELECT COALESCE(SUM({WORD_COUNT}), 0) FROM transcripts
-             WHERE raw_text != '' AND created_at >= datetime('now', '-14 days')
-               AND created_at < datetime('now', '-7 days')"
+             WHERE raw_text != '' AND created_at >= datetime({week_start}, '-7 days')
+               AND created_at < {week_start}"
+        ));
+        let sessions = one("SELECT COUNT(*) FROM transcripts");
+        let previous_week_sessions = one(&format!(
+            "SELECT COUNT(*) FROM transcripts
+             WHERE created_at >= datetime({week_start}, '-7 days') AND created_at < {week_start}"
         ));
 
         // WPM across the whole corpus: total words divided by total active
@@ -135,19 +150,22 @@ impl InsightsRepo {
         let categories = categories(&conn, total_words)?;
         let streak = streaks(&conn)?;
         let heatmap = heatmap(&conn)?;
-        let weekly_words = weekly_words(&conn)?;
+        let weeks = weekly_weeks(&conn)?;
 
         Ok(Insights {
             wpm,
             wpm_trend: trend(wpm, wpm_prev),
             total_words,
             words_this_week,
+            words_previous_week: words_prev_week,
             words_trend: trend(words_this_week, words_prev_week),
+            sessions,
+            previous_week_sessions,
             ai_fixes,
             categories,
             streak,
             heatmap,
-            weekly_words,
+            weeks,
         })
     }
 
@@ -367,47 +385,57 @@ fn heatmap(conn: &Connection) -> Result<Vec<HeatmapDay>> {
             })
             .unwrap_or_default();
         let count = activity.get(&date).copied().unwrap_or(0);
-        let level = match count {
-            0 => 0,
-            1..=2 => 1,
-            3..=5 => 2,
-            6..=10 => 3,
-            _ => 4,
-        };
-        days.push(HeatmapDay { date, level });
+        days.push(HeatmapDay {
+            date,
+            level: heat_level(count),
+        });
     }
     Ok(days)
 }
 
-fn weekly_words(conn: &Connection) -> Result<Vec<WeeklyWordDay>> {
-    let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    let mut days = Vec::with_capacity(7);
-    for offset in (0..7i64).rev() {
-        let date: String = conn
-            .query_row("SELECT date('now', '-' || ?1 || ' days')", [offset], |r| {
-                r.get(0)
-            })
+/// Twelve calendar weeks, oldest first. Each bar is one Monday–Sunday week.
+fn weekly_weeks(conn: &Connection) -> Result<Vec<WeekWords>> {
+    let mut weeks = Vec::with_capacity(12);
+    for offset in (0..12i64).rev() {
+        let start: String = conn
+            .query_row(
+                &format!(
+                    "SELECT date('now', 'localtime', '-6 days', 'weekday 1',
+                             'start of day', '-{} days')",
+                    offset * 7
+                ),
+                [],
+                |r| r.get(0),
+            )
             .unwrap_or_default();
         let words: i64 = conn
             .query_row(
                 &format!(
                     "SELECT COALESCE(SUM({WORD_COUNT}), 0) FROM transcripts
-                     WHERE raw_text != '' AND date(created_at) = ?1"
+                     WHERE raw_text != ''
+                       AND date(created_at, 'localtime') >= ?1
+                       AND date(created_at, 'localtime') <= date(?1, '+6 days')"
                 ),
-                [&date],
+                [&start],
                 |r| r.get(0),
             )
             .unwrap_or(0);
-        let dow: String = conn
-            .query_row("SELECT strftime('%w', ?1)", [&date], |r| r.get(0))
+        let label: String = conn
+            .query_row("SELECT strftime('%m/%d', ?1)", [&start], |r| r.get(0))
             .unwrap_or_default();
-        let index = dow.parse::<usize>().unwrap_or(0);
-        days.push(WeeklyWordDay {
-            label: names[index].to_string(),
-            words,
-        });
+        weeks.push(WeekWords { label, words });
     }
-    Ok(days)
+    Ok(weeks)
+}
+
+fn heat_level(count: i64) -> i64 {
+    match count {
+        0 => 0,
+        1..=2 => 1,
+        3..=5 => 2,
+        6..=10 => 3,
+        _ => 4,
+    }
 }
 
 #[cfg(test)]
@@ -453,7 +481,8 @@ mod tests {
         assert_eq!(summary.total_words, 0);
         assert_eq!(summary.wpm, 0);
         assert_eq!(summary.heatmap.len(), 182);
-        assert_eq!(summary.weekly_words.len(), 7);
+        assert_eq!(summary.weeks.len(), 12);
+        assert_eq!(summary.sessions, 0);
         assert_eq!(summary.streak.longest, 0);
     }
 
@@ -468,7 +497,47 @@ mod tests {
         // Only the row with a duration participates: 4 words / (4s / 60) = 60.
         assert_eq!(summary.wpm, 60);
         assert_eq!(summary.streak.current, 1);
+        assert_eq!(summary.sessions, 2);
         assert!(summary.heatmap.last().is_some_and(|d| d.level == 1));
+        assert!(
+            summary.weeks.last().is_some_and(|w| w.words >= 6),
+            "this week's bar must include today's rows"
+        );
+    }
+
+    #[test]
+    fn week_boundary_starts_monday_and_excludes_older_rows() {
+        let temp = TempDb::new();
+        temp.insert("this week", "cleanup", 1.0);
+        // Eight days back is always before this week's Monday.
+        let conn = Connection::open(&temp.0).unwrap();
+        crate::history::ensure_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO transcripts(raw_text, processed_text, language, mode, model, duration_sec, created_at)
+             VALUES ('old row', 'old row', 'en', 'cleanup', 'parakeet', 1.0, datetime('now', '-8 days'))",
+            [],
+        )
+        .unwrap();
+        let summary = InsightsRepo::new(&temp.0).summary().unwrap();
+        assert_eq!(summary.total_words, 4);
+        assert_eq!(summary.words_this_week, 2);
+        assert_eq!(summary.previous_week_sessions, 1);
+    }
+
+    #[test]
+    fn heatmap_levels_are_discrete() {
+        for (count, level) in [
+            (0, 0),
+            (1, 1),
+            (2, 1),
+            (3, 2),
+            (5, 2),
+            (6, 3),
+            (10, 3),
+            (11, 4),
+        ] {
+            assert_eq!(heat_level(count), level, "count {count}");
+        }
     }
 
     #[test]
