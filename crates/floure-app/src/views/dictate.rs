@@ -60,7 +60,7 @@ pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                 .justify_center()
                 .gap(theme::SPACE_4)
                 .child(center)
-                .child(shortcut_pill(app))
+                .child(shortcut_pill(app, cx))
                 .child(waveform(app)),
         )
         .child(transcript_panel(app, cx))
@@ -144,31 +144,44 @@ pub fn shortcut_display(status: &HotkeyStatus, hotkey: &str) -> (String, Option<
         HotkeyStatus::Registered(_) => (crate::app::display_hotkey(hotkey), None),
         HotkeyStatus::Failed(error) => (
             "Shortcut unavailable".to_string(),
-            Some(format!(
-                "Bind `floure --toggle` in your compositor ({error})"
-            )),
+            Some(format!("Use the tray or run floure --toggle ({error})")),
         ),
         HotkeyStatus::Unavailable => (
-            "Wayland needs a compositor shortcut".to_string(),
-            Some("Add `floure --toggle` to your compositor keybindings".to_string()),
+            "floure --toggle".to_string(),
+            Some("Click to copy · bind it in your compositor".to_string()),
         ),
     }
 }
 
-fn shortcut_pill(app: &FloureApp) -> AnyElement {
+fn shortcut_pill(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
     let (text, hint) = shortcut_display(&app.hotkey_status, &app.config.hotkey);
-    let mut pill = div().flex().flex_col().items_center().gap(px(4.0)).child(
-        div()
-            .px(theme::SPACE_3)
-            .py(px(5.0))
-            .rounded(theme::RADIUS_CONTROL)
-            .border_1()
-            .border_color(theme::border())
-            .bg(theme::surface())
-            .text_size(theme::TEXT_XS)
-            .text_color(theme::text_secondary())
-            .child(text),
-    );
+    let actionable = !matches!(app.hotkey_status, HotkeyStatus::Registered(_));
+    let mut chip = div()
+        .id("copy-trigger")
+        .role(gpui::Role::Button)
+        .aria_label("Copy trigger command")
+        .px(theme::SPACE_3)
+        .py(px(5.0))
+        .rounded(theme::RADIUS_CONTROL)
+        .border_1()
+        .border_color(theme::border())
+        .bg(theme::surface())
+        .text_size(theme::TEXT_XS)
+        .text_color(theme::text_secondary());
+    if actionable {
+        chip = chip
+            .cursor_pointer()
+            .hover(|style| style.bg(theme::raised()))
+            .on_click(
+                cx.listener(|this, _, _, cx| this.copy_to_clipboard_text("floure --toggle", cx)),
+            );
+    }
+    let mut pill = div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(4.0))
+        .child(chip.child(text));
     if let Some(hint) = hint {
         pill = pill.child(
             div()
@@ -187,9 +200,9 @@ fn waveform(app: &FloureApp) -> AnyElement {
         0.30, 0.55, 0.85, 1.0, 0.75, 0.45, 0.25, 0.50, 0.80, 0.95, 0.70, 0.35,
     ];
     let gain = if app.recording {
-        0.55 + app.mic_level * 3.0
+        0.65 + app.mic_level * 3.0
     } else {
-        0.55
+        0.9
     };
     let color = if app.recording {
         theme::text_secondary()
@@ -324,12 +337,16 @@ fn transcript_panel(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement 
         }
         panel = panel.child(lines);
     } else {
+        let title = match app.hotkey_status {
+            HotkeyStatus::Registered(_) => "Press the shortcut and speak",
+            _ => "Trigger dictation and speak",
+        };
         panel = panel
             .child(
                 div()
                     .text_size(theme::TEXT_XL)
                     .text_color(theme::text_muted())
-                    .child("Press the shortcut and speak"),
+                    .child(title),
             )
             .child(
                 div()
@@ -406,8 +423,8 @@ mod tests {
     fn every_wayland_fallback_is_visible_not_silent() {
         let (text, hint) =
             shortcut_display(&HotkeyStatus::Unavailable, "CommandOrControl+Shift+F12");
-        assert_eq!(text, "Wayland needs a compositor shortcut");
-        assert!(hint.is_some_and(|hint| hint.contains("floure --toggle")));
+        assert_eq!(text, "floure --toggle");
+        assert!(hint.is_some_and(|hint| hint.contains("Click to copy")));
 
         let (text, hint) = shortcut_display(&HotkeyStatus::Failed("in use".into()), "Alt+Space");
         assert_eq!(text, "Shortcut unavailable");
