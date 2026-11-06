@@ -503,6 +503,7 @@ fn chip(
         } else {
             theme::text_muted()
         })
+        .hover(|style| style.bg(theme::raised()))
         .on_click(listener);
     if active {
         chip = chip.bg(theme::raised());

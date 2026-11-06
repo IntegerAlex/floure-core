@@ -50,6 +50,7 @@ pub fn render(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             } else {
                 theme::text_muted()
             })
+            .hover(|style| style.bg(theme::raised()))
             .on_click(cx.listener(move |this, _, _, cx| this.set_config_section(index, cx)));
         if active {
             row = row.bg(theme::raised());
