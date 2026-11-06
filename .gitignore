@@ -33,6 +33,9 @@ package-lock.json
 # Rust
 **/target/
 
+# Agent/skill scratch
+.superpowers/
+
 # Tauri
 application/src-tauri/gen/
 application/dist/

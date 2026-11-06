@@ -1,0 +1,21 @@
+[package]
+name = "floure-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "floure"
+path = "src/main.rs"
+
+[dependencies]
+floure-core = { path = "../floure-core" }
+gpui-pre = { workspace = true }
+gpui-pre-platform = { workspace = true, features = ["wayland", "x11"] }
+gpui-pre-wgpu = { workspace = true }
+gpui-component = { workspace = true }
+gpui-base = { workspace = true }
+gpui-kit-assets = { workspace = true }

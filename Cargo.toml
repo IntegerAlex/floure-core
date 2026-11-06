@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["crates/floure-core", "crates/floure-app"]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.95"
+repository = "https://github.com/IntegerAlex/floure-core"
+homepage = "https://www.floure.in/"
+readme = "README.md"
+
+[workspace.dependencies]
+gpui-pre = "=0.3.11"
+gpui-pre-platform = "=0.3.11"
+gpui-pre-wgpu = "=0.3.11"
+gpui-component = "=0.9.0"
+gpui-base = "=0.9.0"
+gpui-kit-assets = "=0.9.0"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
