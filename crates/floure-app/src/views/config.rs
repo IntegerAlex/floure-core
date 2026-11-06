@@ -677,6 +677,37 @@ fn diagnostics(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                 cx.listener(|this, _, _, cx| this.copy_diagnostics(cx)),
             ),
         ))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(theme::SPACE_2)
+                .mt(theme::SPACE_4)
+                .child(
+                    div()
+                        .text_size(theme::TEXT_SM)
+                        .text_color(theme::text_secondary())
+                        .child("Recent errors"),
+                )
+                .child(if app.recent_errors.is_empty() {
+                    div()
+                        .text_size(theme::TEXT_XS)
+                        .text_color(theme::text_faint())
+                        .child("None")
+                        .into_any_element()
+                } else {
+                    let mut log = div().flex().flex_col().gap(px(2.0));
+                    for line in app.recent_errors.iter().rev().take(10) {
+                        log = log.child(
+                            div()
+                                .text_size(theme::TEXT_XS)
+                                .text_color(theme::text_muted())
+                                .child(line.clone()),
+                        );
+                    }
+                    log.into_any_element()
+                }),
+        )
         .into_any_element()
 }
 

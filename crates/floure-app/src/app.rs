@@ -178,6 +178,7 @@ pub struct FloureApp {
     pub search_input: Entity<InputState>,
     pub insights: Option<Insights>,
     pub history_error: Option<String>,
+    pub recent_errors: Vec<String>,
     pub config_section: usize,
     pub config_dirty: bool,
     pub config_error: Option<String>,
@@ -217,6 +218,7 @@ impl FloureApp {
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
+        window.set_window_title("Floure");
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search transcripts"));
         let dictionary_phrase =
@@ -244,6 +246,7 @@ impl FloureApp {
         let dictionary_entries = Dictionary::new(floure_core::config::history_db_path())
             .list(None, None, false)
             .unwrap_or_default();
+        let recent_errors = load_recent_errors();
 
         let warming = engine.as_ref().is_some_and(|engine| engine.is_warming());
         Self {
@@ -291,6 +294,7 @@ impl FloureApp {
             onboarding_step: 0,
             insights,
             history_error,
+            recent_errors,
             activate_next_frame: false,
             focus_handle,
         }
@@ -424,10 +428,10 @@ impl FloureApp {
                 if let Some(line) = self.utterance(utterance_id) {
                     line.streaming = false;
                 }
-                self.engine_error = Some(message);
+                self.record_error(message);
             }
             EngineEvent::OutputFailed { message, .. } => {
-                self.engine_error = Some(message);
+                self.record_error(message);
             }
             EngineEvent::Committed { .. } => {
                 self.refresh_data();
@@ -448,7 +452,7 @@ impl FloureApp {
                     RunState::Error
                 };
                 self.recording = false;
-                self.engine_error = Some(message);
+                self.record_error(message);
             }
             EngineEvent::Stopped { .. } => {
                 self.status = RunState::Idle;
@@ -480,6 +484,23 @@ impl FloureApp {
                 }
             }
         }
+    }
+
+    /// Persist an error so it survives the toast/banner disappearing. The
+    /// Diagnostics section shows the same list.
+    fn record_error(&mut self, message: String) {
+        self.engine_error = Some(message.clone());
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.recent_errors.push(format!("[{stamp}] {message}"));
+        if self.recent_errors.len() > 50 {
+            self.recent_errors.remove(0);
+        }
+        let path = floure_core::config::data_dir().join("recent-errors.log");
+        let _ = std::fs::create_dir_all(floure_core::config::data_dir());
+        let _ = std::fs::write(&path, self.recent_errors.join("\n"));
     }
 
     fn utterance(&mut self, id: u64) -> Option<&mut Utterance> {
@@ -1146,6 +1167,23 @@ impl FloureApp {
                         "Setup"
                     }),
             )
+            .when(self.recording, |bar| {
+                bar.child(
+                    div()
+                        .mr(theme::SPACE_4)
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(div().size(px(6.0)).rounded(px(9999.0)).bg(theme::accent()))
+                        .child(
+                            div()
+                                .text_size(theme::TEXT_XS)
+                                .text_color(theme::accent())
+                                .child("Recording"),
+                        ),
+                )
+            })
             .child(
                 div()
                     .mr(theme::SPACE_4)
@@ -1348,6 +1386,17 @@ fn window_controls(cx: &mut Context<FloureApp>) -> AnyElement {
             .on_click(cx.listener(|_, _, _, cx| cx.quit())),
         )
         .into_any_element()
+}
+
+fn load_recent_errors() -> Vec<String> {
+    std::fs::read_to_string(floure_core::config::data_dir().join("recent-errors.log"))
+        .map(|text| {
+            text.lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
