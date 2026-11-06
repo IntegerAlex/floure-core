@@ -287,9 +287,10 @@ where
                 _ => None,
             };
             if let Some(mono) = mono
-                && !mono.is_empty() {
-                    on_samples(&mono);
-                }
+                && !mono.is_empty()
+            {
+                on_samples(&mono);
+            }
         },
         err_fn,
         None,

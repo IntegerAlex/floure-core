@@ -5,16 +5,17 @@
 //! for callers that cannot wait on an event.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum EngineState {
-    Idle,
-    Listening,
-    Stopping,
-    Transcribing,
-    Rewriting,
-    Error,
-    NoModel,
-    Warming,
-    Stopped,
+    Idle = 0,
+    Listening = 1,
+    Stopping = 2,
+    Transcribing = 3,
+    Rewriting = 4,
+    Error = 5,
+    NoModel = 6,
+    Warming = 7,
+    Stopped = 8,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -66,10 +66,11 @@ impl VoiceActivityDetector {
 
     pub fn try_get_segment(&mut self) -> Option<Vec<f32>> {
         if !self.vad.is_empty()
-            && let Some(segment) = self.vad.front() {
-                self.vad.pop();
-                return Some(segment.samples().to_vec());
-            }
+            && let Some(segment) = self.vad.front()
+        {
+            self.vad.pop();
+            return Some(segment.samples().to_vec());
+        }
         None
     }
 

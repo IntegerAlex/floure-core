@@ -79,13 +79,14 @@ fn opted_out() -> bool {
 /// LTS"); elsewhere the compile-time target is all we can state honestly.
 fn os_version() -> String {
     if cfg!(target_os = "linux")
-        && let Ok(text) = std::fs::read_to_string("/etc/os-release") {
-            for line in text.lines() {
-                if let Some(v) = line.strip_prefix("PRETTY_NAME=") {
-                    return v.trim().trim_matches('"').to_string();
-                }
+        && let Ok(text) = std::fs::read_to_string("/etc/os-release")
+    {
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("PRETTY_NAME=") {
+                return v.trim().trim_matches('"').to_string();
             }
         }
+    }
     String::new()
 }
 

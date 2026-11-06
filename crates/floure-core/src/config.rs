@@ -232,22 +232,24 @@ pub fn data_dir() -> PathBuf {
 pub fn history_db_path() -> PathBuf {
     let canonical = data_dir().join("history.db");
 
-    if std::env::var("STT_DATA_DIR").is_err() && !canonical.exists()
-        && let Some(home) = dirs_next::home_dir() {
-            let legacy = home.join(".local/share/stt/history.db");
-            if legacy != canonical && legacy.exists() {
-                if let Some(parent) = canonical.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if std::fs::copy(&legacy, &canonical).is_ok() {
-                    eprintln!(
-                        "migrated history DB from legacy path {} to {}",
-                        legacy.display(),
-                        canonical.display()
-                    );
-                }
+    if std::env::var("STT_DATA_DIR").is_err()
+        && !canonical.exists()
+        && let Some(home) = dirs_next::home_dir()
+    {
+        let legacy = home.join(".local/share/stt/history.db");
+        if legacy != canonical && legacy.exists() {
+            if let Some(parent) = canonical.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if std::fs::copy(&legacy, &canonical).is_ok() {
+                eprintln!(
+                    "migrated history DB from legacy path {} to {}",
+                    legacy.display(),
+                    canonical.display()
+                );
             }
         }
+    }
 
     canonical
 }
@@ -258,9 +260,10 @@ impl AppConfig {
 
         if store_path.exists()
             && let Ok(contents) = std::fs::read_to_string(&store_path)
-                && let Ok(config) = serde_json::from_str::<AppConfig>(&contents) {
-                    return config;
-                }
+            && let Ok(config) = serde_json::from_str::<AppConfig>(&contents)
+        {
+            return config;
+        }
         Self::default()
     }
 

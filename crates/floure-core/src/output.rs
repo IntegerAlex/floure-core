@@ -73,7 +73,7 @@ pub fn save_to_history(
     language: &str,
     duration_sec: f64,
     db_path: &std::path::Path,
-) -> Result<()> {
+) -> Result<i64> {
     use rusqlite::Connection;
     let conn = Connection::open(db_path)?;
     crate::history::ensure_schema(&conn)?;
@@ -82,7 +82,7 @@ pub fn save_to_history(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![raw_text, text, language, mode, model, duration_sec],
     )?;
-    Ok(())
+    Ok(conn.last_insert_rowid())
 }
 
 pub fn type_windows_paste(text: &str) -> Result<bool> {

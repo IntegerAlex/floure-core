@@ -52,9 +52,10 @@ pub fn set_openrouter_api_key(key: String) {
 
 pub(crate) fn openrouter_api_key() -> Option<String> {
     if let Some(slot) = OPENROUTER_API_KEY.get()
-        && let Some(key) = slot.lock().unwrap().clone() {
-            return Some(key);
-        }
+        && let Some(key) = slot.lock().unwrap().clone()
+    {
+        return Some(key);
+    }
     std::env::var("OPENROUTER_API_KEY").ok()
 }
 
@@ -539,9 +540,10 @@ fn drain_sse_buffer(buffer: &mut String, chunk_text: &str) -> Vec<String> {
     while let Some(pos) = buffer.find('\n') {
         let line: String = buffer.drain(..=pos).collect();
         if let Some(token) = extract_delta_content(&line)
-            && !token.is_empty() {
-                tokens.push(token);
-            }
+            && !token.is_empty()
+        {
+            tokens.push(token);
+        }
     }
     tokens
 }

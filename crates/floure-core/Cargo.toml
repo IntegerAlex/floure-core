@@ -9,6 +9,7 @@ homepage.workspace = true
 
 [dependencies]
 anyhow = "1"
+async-broadcast = "0.7"
 bzip2 = "0.4"
 cpal = "0.18"
 csv = "1"

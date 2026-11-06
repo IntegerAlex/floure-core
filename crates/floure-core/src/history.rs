@@ -77,6 +77,65 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Repository facade for the History screen. It opens the database per call so
+/// the GPUI thread never holds a connection across an await point.
+pub struct History {
+    db: std::path::PathBuf,
+}
+
+impl History {
+    pub fn new(db: impl Into<std::path::PathBuf>) -> Self {
+        Self { db: db.into() }
+    }
+
+    fn conn(&self) -> Result<Connection> {
+        open(&self.db)
+    }
+
+    pub fn recent(&self, limit: usize) -> Result<Vec<TranscriptRow>> {
+        recent(&self.conn()?, limit)
+    }
+
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<TranscriptRow>> {
+        search(&self.conn()?, query, limit)
+    }
+
+    pub fn delete(&self, ids: &[i64]) -> Result<usize> {
+        let conn = self.conn()?;
+        let mut deleted = 0;
+        for id in ids {
+            deleted += conn.execute("DELETE FROM transcripts WHERE id = ?1", [id])?;
+        }
+        Ok(deleted)
+    }
+
+    pub fn set_favorite(&self, id: i64, favorite: bool) -> Result<bool> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "UPDATE transcripts SET favorite = ?1 WHERE id = ?2",
+            rusqlite::params![favorite as i64, id],
+        )? > 0)
+    }
+
+    /// Export the given rows as CSV. The caller passes the already-filtered
+    /// rows so the export always matches what the screen shows.
+    pub fn export_csv(&self, rows: &[TranscriptRow]) -> String {
+        let mut out = String::from("created_at,language,mode,model,duration_sec,text\n");
+        for row in rows {
+            out.push_str(&format!(
+                "{},\"{}\",\"{}\",\"{}\",{:.2},\"{}\"\n",
+                row.created_at,
+                row.language,
+                row.mode,
+                row.model,
+                row.duration_sec,
+                row.processed_text.replace('"', "\"\"")
+            ));
+        }
+        out
+    }
+}
+
 pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<TranscriptRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, raw_text, processed_text, language, mode, model, duration_sec, favorite, created_at

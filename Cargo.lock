@@ -1907,6 +1907,7 @@ name = "floure-core"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "async-broadcast",
  "bzip2 0.4.4",
  "cpal",
  "csv",
