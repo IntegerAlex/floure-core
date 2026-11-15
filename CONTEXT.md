@@ -15,8 +15,12 @@ clipboard. No cloud account is required for the local path.
   - Audio capture: `cpal` (`audio.rs`).
   - VAD: Silero (`vad.rs`).
   - ASR: Parakeet + Whisper via `sherpa-onnx` (`parakeet.rs`, `whisper.rs`, `models.rs`).
-  - Deterministic repair: sentence breaks, question marks, spacing, casing,
-    terminal full stops (`text.rs`).
+  - Deterministic repair: sentence assembly across VAD segments, sentence
+    breaks, question marks, spacing, casing, terminal full stops, money/time/
+    percent/unit ITN (`text.rs`).
+  - Output replacements from the dictionary and opt-in spoken punctuation.
+  - Live partial text is display-only; the ASR cache unloads after 3 idle
+    minutes.
   - Optional Polish: local models via `llama.cpp`, or OpenRouter (`llm.rs`).
   - Output: typing + clipboard (`output.rs`); loop in `pipeline.rs`.
   - Lifecycle and events: `engine.rs`, `events.rs`, `sink.rs`.
