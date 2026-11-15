@@ -48,3 +48,6 @@ application/dist/
 # Benchmark audio (regenerable via benchmark-audio/fetch.py, CC BY 4.0)
 benchmark-audio/wavs/
 benchmark-audio/baseline*.json
+
+# Local worktrees
+.worktrees/
