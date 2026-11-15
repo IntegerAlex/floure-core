@@ -162,6 +162,9 @@ pub struct LlmProcessor {
 
 impl LlmProcessor {
     pub fn new(config: AppConfig) -> Self {
+        if config.llm_mode == LlmMode::Off {
+            return Self { llm: None, config };
+        }
         // Build the model path from the selected LLM model ID in config.
         // The manifest's `filename` field is the on-disk name; fall back to
         // the legacy gemma path if the model isn't in the manifest yet.
@@ -200,6 +203,9 @@ impl LlmProcessor {
     }
 
     pub fn from_cached(config: AppConfig, llm: Option<LlmCleanup>) -> Self {
+        if config.llm_mode == LlmMode::Off {
+            return Self { llm: None, config };
+        }
         Self { llm, config }
     }
 
@@ -219,28 +225,32 @@ impl LlmProcessor {
             return;
         }
         let mode = self.config.llm_mode;
+        // Deterministic repair first. It is cheap, local, and fixes the
+        // mechanical artifacts (premature periods, missing question marks,
+        // spacing, casing) before any optional model sees the text.
+        let normalized = crate::text::normalize(text);
         let cleaned: String;
 
         if mode == LlmMode::Off {
-            cleaned = text.to_string();
+            cleaned = normalized;
         } else if mode == LlmMode::Cleanup
-            && !crate::llm::needs_cleanup(text, timestamps, durations)
+            && !crate::llm::needs_cleanup(&normalized, timestamps, durations)
         {
             // Skip the LLM on transcripts that look clean: the pass costs
             // seconds and unconstrained rewriting regresses good output.
-            eprintln!("[pipeline] cleanup gate: skipped (looks clean)");
-            cleaned = text.to_string();
+            eprintln!("[pipeline] polish gate: skipped (looks clean)");
+            cleaned = normalized;
         } else if self
             .llm
             .as_ref()
-            .is_some_and(|l| text.len() <= crate::llm::max_transcript_bytes(l.backend))
+            .is_some_and(|l| normalized.len() <= crate::llm::max_transcript_bytes(l.backend))
         {
             // Whole or not at all: the model's output *replaces* the entire
             // transcript, so feeding it a tail-clipped fragment silently drops
             // everything before the clip — speech the user never sees. Past the
             // budget, the trailing branch passes the text through untouched.
             let llm = self.llm.as_mut().expect("checked in the condition above");
-            let prompt = crate::llm::build_prompt(text, mode);
+            let prompt = crate::llm::build_prompt(&normalized, mode);
             let _ = app.emit("llm_start", serde_json::json!({}));
 
             let collected = Arc::new(std::sync::Mutex::new(String::new()));
@@ -254,20 +264,36 @@ impl LlmProcessor {
 
             let _ = app.emit("llm_end", serde_json::json!({}));
             if result.is_ok() {
-                cleaned = crate::llm::clean_response(&collected.lock().unwrap());
+                let candidate = crate::llm::clean_response(&collected.lock().unwrap());
+                match crate::llm::validate_polish(&normalized, &candidate) {
+                    Some(text) => cleaned = text,
+                    None => {
+                        eprintln!("[pipeline] polish rejected (empty or summarised)");
+                        let _ = app.emit(
+                            "llm_error",
+                            serde_json::json!({
+                                "error": "Polish returned an empty or shortened result; kept the deterministic transcript."
+                            }),
+                        );
+                        cleaned = normalized;
+                    }
+                }
             } else {
-                // Fall back to the raw transcript, but surface the failure
-                // instead of silently degrading: the frontend shows it.
+                // Fall back to the deterministic transcript, but surface the
+                // failure instead of silently degrading.
                 if let Err(e) = result {
-                    eprintln!("[pipeline] LLM cleanup failed: {}", e);
+                    eprintln!("[pipeline] polish failed: {}", e);
                     let _ = app.emit("llm_error", serde_json::json!({"error": e.to_string()}));
                 }
-                cleaned = crate::llm::clean_response(text);
+                cleaned = normalized;
             }
+        } else if self.llm.is_none() && mode != LlmMode::Off {
+            eprintln!("[pipeline] polish selected but no local cleanup model is loaded");
+            cleaned = normalized;
         } else {
             // No LLM configured, or the transcript is over that backend's
             // budget — pass it through whole rather than clean a fragment of it.
-            cleaned = crate::llm::clean_response(text);
+            cleaned = normalized;
         }
 
         // Fillers come out deterministically, whatever produced `cleaned` —
@@ -277,6 +303,14 @@ impl LlmProcessor {
         // ponytail: the decoder bleeds space runs onto utterance ends; trim
         // them. Internal newlines (bullet/email modes) are preserved.
         let cleaned = cleaned.trim().to_string();
+        // Run the deterministic repair again on prose: filler removal can
+        // expose a double space or leave a sentence open. Generative modes
+        // keep their deliberate structure.
+        let cleaned = if matches!(mode, LlmMode::Off | LlmMode::Cleanup) {
+            crate::text::normalize(&cleaned)
+        } else {
+            cleaned
+        };
         let _ = app.emit("cleanup_done", serde_json::json!({ "text": cleaned }));
 
         // A cancel or a newer run during a long cleanup pass must not type
@@ -561,14 +595,13 @@ pub fn warm_engines(app: crate::sink::AppHandle, config: AppConfig) {
     if !(vad_ok && asr_ok) {
         return;
     }
-    eprintln!("[pipeline] warming engines in background");
+    eprintln!("[pipeline] warming ASR in background");
     let (parakeet, whisper, _) = build_recognizers(&config, &app);
-    let llm = {
-        let _build = LLM_BUILD.lock().unwrap_or_else(|e| e.into_inner());
-        LlmProcessor::new(config.clone()).into_llm()
-    };
-    store_engines(key, parakeet, whisper, llm);
-    eprintln!("[pipeline] engines warm");
+    // Deliberately do not load the cleanup LLM here. On a 15 GB machine the
+    // ASR set plus llama.cpp can sit for hours without a second press; the
+    // first pass that actually needs cleanup builds it on the worker thread.
+    store_engines(key, parakeet, whisper, None);
+    eprintln!("[pipeline] ASR warm");
 }
 
 pub struct PipelineController {

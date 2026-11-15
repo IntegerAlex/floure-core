@@ -10,7 +10,7 @@ use crate::app::FloureApp;
 use crate::theme;
 
 const MODES: [(&str, &str); 5] = [
-    ("cleanup", "Cleanup"),
+    ("cleanup", "Polish"),
     ("email", "Email"),
     ("bullet_list", "Bullets"),
     ("commit_message", "Commit"),

@@ -105,7 +105,15 @@ pub fn inference_threads() -> u32 {
     let avail = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(4);
-    avail.saturating_sub(4).clamp(2, 8)
+    // Leave the compositor and the GPUI renderer room. Ceiling 4 keeps a
+    // 16-core machine around 25% total CPU during a decode; FLOURE_MAX_THREADS
+    // lets a user go lower (1) on a memory/CPU-constrained laptop.
+    let ceiling = std::env::var("FLOURE_MAX_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(4)
+        .clamp(1, 4);
+    avail.saturating_sub(4).clamp(2.min(ceiling), ceiling)
 }
 
 /// NVIDIA proprietary driver presence: /dev/nvidia* nodes, confirmed by
@@ -185,7 +193,7 @@ mod tests {
     #[test]
     fn inference_threads_stay_within_budget() {
         // Hardware-independent: whatever the core count, the budget leaves
-        // headroom (never all cores) and stays usable (never < 2).
-        assert!((2..=8).contains(&inference_threads()));
+        // headroom and can be lowered to 1 via FLOURE_MAX_THREADS.
+        assert!((1..=4).contains(&inference_threads()));
     }
 }

@@ -504,7 +504,9 @@ fn cleanup(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         .flex_col()
         .child(setting(
             "Mode",
-            Some("Staged until Apply"),
+            Some(
+                "Polish adds an optional local-LLM pass; Off keeps raw ASR + deterministic repair",
+            ),
             button(
                 "llm-mode",
                 llm_mode_label(app.config.llm_mode),
@@ -518,7 +520,7 @@ fn cleanup(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         .child(setting(
             "Provider",
             Some(if local {
-                "Cleanup stays on this machine"
+                "Polish stays on this machine"
             } else {
                 "OpenRouter sends the transcript off this machine"
             }),
@@ -532,6 +534,39 @@ fn cleanup(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
                 }),
             ),
         ));
+
+    if matches!(app.config.llm_mode, LlmMode::Off) {
+        list = list.child(
+            div()
+                .py(theme::SPACE_3)
+                .text_size(theme::TEXT_SM)
+                .text_color(theme::text_muted())
+                .child("Polish is off. Dictation uses the ASR transcript plus deterministic punctuation repair."),
+        );
+    } else if local {
+        let selected = if app.config.llm_model.trim().is_empty() {
+            "s1-mini-q4_k_m"
+        } else {
+            app.config.llm_model.as_str()
+        };
+        let downloaded = app
+            .model_statuses
+            .iter()
+            .find(|model| model.id == selected && model.backend == "llm")
+            .is_some_and(|model| model.downloaded);
+        if !downloaded {
+            list = list.child(
+                div()
+                    .py(theme::SPACE_3)
+                    .text_size(theme::TEXT_SM)
+                    .text_color(theme::error())
+                    .child(format!(
+                        "Polish is selected, but {} is not downloaded. Deterministic text is used until it is.",
+                        selected
+                    )),
+            );
+        }
+    }
 
     if local {
         list = list.child(
@@ -1096,7 +1131,7 @@ fn asr_label(app: &FloureApp) -> String {
 fn llm_mode_label(mode: LlmMode) -> &'static str {
     match mode {
         LlmMode::Off => "Off",
-        LlmMode::Cleanup => "Cleanup",
+        LlmMode::Cleanup => "Polish",
         LlmMode::BulletList => "Bullet list",
         LlmMode::Email => "Email",
         LlmMode::CommitMessage => "Commit message",
