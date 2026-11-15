@@ -191,11 +191,14 @@ pub fn start(engine: Arc<Engine>, binding: Binding, mode: PttMode) -> Result<Str
     Ok(label)
 }
 
-/// Add readable keyboard devices, drop nodes that no longer exist.
-fn scan(devices: &mut HashMap<PathBuf, Device>) {
+/// Add readable keyboard devices, drop nodes that no longer exist. Returns
+/// true when the set changed, so a held chord can be released.
+fn scan(devices: &mut HashMap<PathBuf, Device>) -> bool {
+    let before = devices.len();
     devices.retain(|path, _| path.exists());
+    let mut changed = devices.len() != before;
     let Ok(entries) = std::fs::read_dir("/dev/input") else {
-        return;
+        return changed;
     };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -214,7 +217,9 @@ fn scan(devices: &mut HashMap<PathBuf, Device>) {
             continue;
         }
         devices.insert(path, device);
+        changed = true;
     }
+    changed
 }
 
 /// What a key event means for dictation.
@@ -248,11 +253,9 @@ fn run(
 
     loop {
         if last_scan.elapsed() >= RESCAN {
-            let before = devices.len();
-            scan(&mut devices);
-            if devices.len() != before && pressed {
-                // The keyboard we were listening to went away mid-hold. Emit
-                // the release ourselves; no key-up is coming.
+            if scan(&mut devices) && pressed {
+                // The keyboard we were listening to changed mid-hold. Emit the
+                // release ourselves; no key-up is coming.
                 pressed = false;
                 engine.stop();
             }
@@ -272,8 +275,15 @@ fn run(
                 Err(_) => dead.push(path.clone()),
             }
         }
+        let lost = !dead.is_empty();
         for path in dead {
             devices.remove(&path);
+        }
+        if lost && pressed {
+            // A device that errored while the chord was held will never send
+            // the key-up. Stop rather than record until the duration cap.
+            pressed = false;
+            engine.stop();
         }
 
         let empty = devices.is_empty();
