@@ -238,9 +238,24 @@ fn shortcuts(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
     };
     let command = "floure --toggle";
     let mut list = div().flex().flex_col();
-    list = list.child(setting(
-        "Global shortcut",
-        status_hint.as_deref().or(Some(status)),
+    let shortcut_control: AnyElement = if matches!(app.hotkey_status, HotkeyStatus::NeedsInputGroup)
+    {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(theme::SPACE_2)
+            .child(value(crate::hotkeys::INPUT_GROUP_COMMAND))
+            .child(button(
+                "copy-input-group",
+                "Copy",
+                false,
+                cx.listener(|this, _, _, cx| {
+                    this.copy_to_clipboard_text(crate::hotkeys::INPUT_GROUP_COMMAND, cx)
+                }),
+            ))
+            .into_any_element()
+    } else {
         value(
             if matches!(
                 app.hotkey_status,
@@ -250,7 +265,12 @@ fn shortcuts(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             } else {
                 status.to_string()
             },
-        ),
+        )
+    };
+    list = list.child(setting(
+        "Global shortcut",
+        status_hint.as_deref().or(Some(status)),
+        shortcut_control,
     ));
     list = list.child(setting(
         "Status widget",

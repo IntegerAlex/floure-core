@@ -37,6 +37,9 @@ static PIPELINE_RUNNING: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceL
 /// never reaches the focused window or the history file.
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(test)]
+static PIPELINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Monotonic run id, bumped on every stop and every start.
 ///
 /// The worker also polls `PIPELINE_RUNNING`, but that flag alone cannot decide
@@ -1046,6 +1049,9 @@ mod run_id_tests {
     /// old run dead even though the shared flag goes true again afterwards.
     #[test]
     fn a_later_run_never_revives_an_earlier_one() {
+        let _serial = crate::pipeline::PIPELINE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let first = begin_run();
         assert!(run_is_current(first));
 
@@ -1151,14 +1157,12 @@ mod flush_tests {
 mod cancel_tests {
     use super::*;
     use crate::config::AppConfig;
-    use std::sync::Mutex;
-
-    /// The two tests below share the process-global cancel flag and env var.
-    static SERIAL: Mutex<()> = Mutex::new(());
 
     #[test]
     fn cancel_is_quiet_and_drops_the_run() {
-        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = crate::pipeline::PIPELINE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let run = begin_run();
         assert!(run_is_current(run));
 
@@ -1169,11 +1173,56 @@ mod cancel_tests {
         CANCELLED.store(false, Ordering::SeqCst);
     }
 
+    #[test]
+    fn off_mode_emits_deterministic_text_without_an_llm() {
+        let _serial = crate::pipeline::PIPELINE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("floure-text-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: serialised by SERIAL.
+        unsafe { std::env::set_var("STT_DATA_DIR", &dir) };
+
+        let mut config = AppConfig::default();
+        config.llm_mode = LlmMode::Off;
+        config.typing_enabled = false;
+        config.clipboard_enabled = false;
+        let (sink, mut rx) = crate::sink::EventSink::new();
+        let app = sink.app_handle();
+        let mut processor = LlmProcessor::from_cached(config, None);
+        let run_id = begin_run();
+        processor.process("what can we do", &[], &[], run_id, &app);
+
+        let mut final_text = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::events::EngineEvent::CleanupDone { text, .. } = event {
+                final_text = Some(text);
+            }
+        }
+        assert_eq!(final_text.as_deref(), Some("What can we do?"));
+        let conn = crate::history::open(&dir.join("history.db")).unwrap();
+        let stored: String = conn
+            .query_row(
+                "SELECT processed_text FROM transcripts ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "What can we do?");
+
+        // SAFETY: still serialised.
+        unsafe { std::env::remove_var("STT_DATA_DIR") };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The guarantee that matters: a cancelled utterance emits no Final and
     /// never reaches the history file, so nothing can be typed from it.
     #[test]
     fn cancelled_utterance_emits_nothing_and_writes_no_history() {
-        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = crate::pipeline::PIPELINE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("floure-cancel-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
