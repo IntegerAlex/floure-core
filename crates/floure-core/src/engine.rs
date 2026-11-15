@@ -125,7 +125,9 @@ impl Engine {
     /// Release the warm model cache. Called after a long idle period; the
     /// next start reloads from disk.
     pub fn unload_models(&self) {
-        crate::pipeline::unload_cached_engines();
+        // Off the UI thread: the unload takes the pipeline transition lock,
+        // which a stop may still hold while it joins the worker.
+        std::thread::spawn(crate::pipeline::unload_cached_engines);
     }
 
     pub fn cancel(&self) {
