@@ -28,7 +28,7 @@ pub fn type_text(text: &str) -> Result<bool> {
 
     match (platform, display_server) {
         ("windows", _) => type_windows_paste(text),
-        ("linux", "wayland") => run_piped_command(text, "wtype", &["-"]),
+        ("linux", "wayland") => type_wayland(text),
         ("linux", "x11") | ("linux", "unknown") => {
             run_piped_command(text, "xdotool", &["type", "--clearmodifiers"])
         }
@@ -40,6 +40,64 @@ pub fn type_text(text: &str) -> Result<bool> {
         }
         _ => Err(anyhow::anyhow!("No typing backend available")),
     }
+}
+
+/// Wayland typing backends, tried in order.
+///
+/// `wtype` needs no daemon and handles Unicode best. `dotool` and `ydotool`
+/// inject through uinput, so they still work when the compositor's virtual
+/// keyboard protocol is missing — but both need a daemon or the `input` group.
+const WAYLAND_TYPERS: [&str; 3] = ["wtype", "dotool", "ydotool"];
+
+/// Type on Wayland, falling through the backend list.
+///
+/// A tool that is not installed is skipped; a tool that runs and fails is also
+/// skipped, and only when every backend has failed is the failure reported.
+fn type_wayland(text: &str) -> Result<bool> {
+    let mut last_error = None;
+    for tool in WAYLAND_TYPERS {
+        match run_typer(text, tool) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => last_error = Some(error),
+        }
+    }
+    match last_error {
+        Some(error) => Err(error),
+        None => Ok(false),
+    }
+}
+
+fn run_typer(text: &str, tool: &str) -> Result<bool> {
+    match tool {
+        "wtype" => run_piped_command(text, "wtype", &["-"]),
+        // dotool is line-protocol on stdin: one `type` per line, explicit
+        // Enter between them because a newline ends the command.
+        "dotool" => run_piped_command(&dotool_stream(text), "dotool", &[]),
+        // ydotool takes the text as an argument. One millisecond between keys
+        // keeps KWin from dropping a modifier key-up.
+        _ => {
+            let output = Command::new("ydotool")
+                .args(["type", "--key-delay", "1", "--", text])
+                .output()?;
+            Ok(output.status.success())
+        }
+    }
+}
+
+fn dotool_stream(text: &str) -> String {
+    let mut stream = String::new();
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            stream.push_str("key enter\n");
+        }
+        if !line.is_empty() {
+            stream.push_str("type ");
+            stream.push_str(line);
+            stream.push('\n');
+        }
+    }
+    stream
 }
 
 pub fn copy_to_clipboard(text: &str) -> Result<bool> {
@@ -194,4 +252,26 @@ pub fn run_piped_command(text: &str, tool: &str, prefix_args: &[&str]) -> Result
 
     let status = child.wait()?;
     Ok(status.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wayland_typers_keep_the_documented_order() {
+        assert_eq!(WAYLAND_TYPERS, ["wtype", "dotool", "ydotool"]);
+    }
+
+    #[test]
+    fn dotool_gets_a_line_protocol_stream() {
+        assert_eq!(dotool_stream("hello world"), "type hello world\n");
+        assert_eq!(dotool_stream("one\ntwo"), "type one\nkey enter\ntype two\n");
+        // A blank line still needs its Enter; `type ` with nothing after it is
+        // not a command dotool understands.
+        assert_eq!(
+            dotool_stream("one\n\ntwo"),
+            "type one\nkey enter\nkey enter\ntype two\n"
+        );
+    }
 }
