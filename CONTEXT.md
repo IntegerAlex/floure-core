@@ -3,9 +3,9 @@
 ## What it is
 
 Floure is a Linux-first desktop dictation app: speak into the mic → speech is
-transcribed locally → an optional LLM pass cleans it up → text is typed into
-the focused window or copied to the clipboard. No cloud account is required
-for the local path.
+transcribed locally → deterministic punctuation/casing repair → an optional
+LLM polish pass → text is typed into the focused window or copied to the
+clipboard. No cloud account is required for the local path.
 
 ## Stack
 
@@ -15,7 +15,9 @@ for the local path.
   - Audio capture: `cpal` (`audio.rs`).
   - VAD: Silero (`vad.rs`).
   - ASR: Parakeet + Whisper via `sherpa-onnx` (`parakeet.rs`, `whisper.rs`, `models.rs`).
-  - LLM cleanup: local models via `llama.cpp`, or OpenRouter (`llm.rs`).
+  - Deterministic repair: sentence breaks, question marks, spacing, casing,
+    terminal full stops (`text.rs`).
+  - Optional Polish: local models via `llama.cpp`, or OpenRouter (`llm.rs`).
   - Output: typing + clipboard (`output.rs`); loop in `pipeline.rs`.
   - Lifecycle and events: `engine.rs`, `events.rs`, `sink.rs`.
   - Data: `history.rs` (FTS5), `dictionary.rs`, `insights.rs`, `config.rs`,
@@ -35,7 +37,8 @@ for the local path.
 - Config: `~/.config/floure/config.json`.
 - Settings bridge: `~/.config/floure/ui-state.json`, written once by the old
   Tauri app and retired by `floure_core::migrate`.
-- Decisions: `docs/adr/` (0005 GPUI platform, 0006 license, 0007 packaging).
+- Decisions: `docs/adr/` (0005 GPUI platform, 0006 license, 0007 packaging,
+  0008 Wayland input and widget).
 
 ## Build / check / test
 
@@ -59,7 +62,8 @@ bridge release has been cut and the manual migration matrix has passed.
 ## Glossary
 
 - **Profile:** ASR model preset (Parakeet / Whisper Turbo / Whisper Base).
-- **Cleanup:** LLM rewrite pass over raw transcripts (punctuation, fillers).
+- **Repair:** deterministic, non-generative punctuation/casing/spacing pass.
+- **Polish:** optional LLM pass over the repaired text.
 - **Pipeline:** mic → VAD → ASR → cleanup → output loop (`pipeline.rs`).
 - **Engine state:** `Idle / Listening / Stopping / Transcribing / Rewriting /
   Error / NoModel / Warming / Stopped`, fanned out as `EngineEvent`.
