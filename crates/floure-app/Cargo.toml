@@ -27,6 +27,11 @@ gpui-component = { workspace = true }
 gpui-base = { workspace = true }
 gpui-kit-assets = { workspace = true }
 
+# Wayland global shortcut, opt-in and `input`-group gated. Linux only: the
+# other global-hotkey platforms keep the X11/Windows/macOS path.
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.13"
+
 [package.metadata.deb]
 maintainer = "Akshat Kotpalliwar <inquiry.akshatkotpalliwar@gmail.com>"
 copyright = "2026, Akshat Kotpalliwar"
