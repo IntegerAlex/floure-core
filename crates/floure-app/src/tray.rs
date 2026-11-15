@@ -78,6 +78,12 @@ impl Tray for FloureTray {
                 ..Default::default()
             }
             .into(),
+            StandardItem {
+                label: "Show widget".into(),
+                activate: Box::new(|_: &mut FloureTray| crate::control_server::request_widget()),
+                ..Default::default()
+            }
+            .into(),
             MenuItem::Separator,
             StandardItem {
                 label: "Quit Floure".into(),

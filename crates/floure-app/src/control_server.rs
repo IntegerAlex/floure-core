@@ -17,6 +17,7 @@ pub const ADDR: &str = "127.0.0.1:17833";
 static SHOW_REQUESTED: AtomicBool = AtomicBool::new(false);
 static DICTATE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static CONFIG_REQUESTED: AtomicBool = AtomicBool::new(false);
+static WIDGET_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub fn request_show() {
     SHOW_REQUESTED.store(true, Ordering::SeqCst);
@@ -30,6 +31,10 @@ pub fn request_config() {
     CONFIG_REQUESTED.store(true, Ordering::SeqCst);
 }
 
+pub fn request_widget() {
+    WIDGET_REQUESTED.store(true, Ordering::SeqCst);
+}
+
 pub fn take_show_request() -> bool {
     SHOW_REQUESTED.swap(false, Ordering::SeqCst)
 }
@@ -40,6 +45,10 @@ pub fn take_dictate_request() -> bool {
 
 pub fn take_config_request() -> bool {
     CONFIG_REQUESTED.swap(false, Ordering::SeqCst)
+}
+
+pub fn take_widget_request() -> bool {
+    WIDGET_REQUESTED.swap(false, Ordering::SeqCst)
 }
 
 /// Start the server. Returns an error if the port is already bound, which is

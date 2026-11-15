@@ -103,6 +103,14 @@ impl RunState {
         }
     }
 
+    /// The widget is status-only: it exists while there is something to say.
+    pub fn shows_widget(self) -> bool {
+        matches!(
+            self,
+            Self::Listening | Self::Stopping | Self::Transcribing | Self::Rewriting
+        )
+    }
+
     fn from_engine(state: EngineState) -> Self {
         match state {
             EngineState::Idle => Self::Idle,
@@ -170,6 +178,7 @@ pub struct FloureApp {
     pub reduce_motion: bool,
     pub engine_error: Option<String>,
     pub hotkey_status: HotkeyStatus,
+    pub widget: crate::widget::WidgetHost,
     pub history: Vec<TranscriptRow>,
     pub history_query: String,
     pub history_favorites_only: bool,
@@ -278,6 +287,7 @@ impl FloureApp {
             reduce_motion: detect_reduce_motion(),
             engine_error: None,
             hotkey_status,
+            widget: crate::widget::WidgetHost::new(),
             history,
             history_query: String::new(),
             history_favorites_only: false,
@@ -325,6 +335,7 @@ impl FloureApp {
                     if this
                         .update(cx, |this, cx| {
                             this.handle_event(event);
+                            this.sync_widget(cx);
                             cx.notify();
                         })
                         .is_err()
@@ -367,6 +378,10 @@ impl FloureApp {
                     if crate::control_server::take_config_request() {
                         this.destination = Destination::Configuration;
                         this.activate_next_frame = true;
+                        changed = true;
+                    }
+                    if crate::control_server::take_widget_request() {
+                        this.show_widget(cx);
                         changed = true;
                     }
                     if changed {
@@ -495,6 +510,31 @@ impl FloureApp {
                 }
             }
         }
+    }
+
+    /// Keep the layer-shell widget in step with the engine. The widget owns
+    /// its own window; this only feeds it the state it must not guess.
+    fn sync_widget(&mut self, cx: &mut Context<Self>) {
+        self.widget.sync(self.status, self.mic_level, cx);
+    }
+
+    /// Tray "Show widget": visible while idle too, showing the real state.
+    pub fn show_widget(&mut self, cx: &mut Context<Self>) {
+        if !self.widget.supported() {
+            self.config_notice = Some(self.widget.status());
+            return;
+        }
+        self.widget.show_manual(self.status, self.mic_level, cx);
+    }
+
+    /// Exposed in Diagnostics: the widget is optional, and its absence must be
+    /// explainable rather than invisible.
+    pub fn widget_supported(&self) -> bool {
+        self.widget.supported()
+    }
+
+    pub fn widget_status(&self) -> String {
+        self.widget.status()
     }
 
     /// Persist an error so it survives the toast/banner disappearing. The

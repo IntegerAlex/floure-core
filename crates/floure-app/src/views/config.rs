@@ -253,6 +253,11 @@ fn shortcuts(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         ),
     ));
     list = list.child(setting(
+        "Status widget",
+        Some("Layer-shell overlay shown while dictating"),
+        value(app.widget_status()),
+    ));
+    list = list.child(setting(
         "Loopback command",
         Some("Bind this in your compositor"),
         code_with_copy(command, cx),
@@ -815,6 +820,15 @@ fn diagnostics(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             "Models",
             None,
             value(app.config.model_dir.display().to_string()),
+        ))
+        .child(setting(
+            "Status widget",
+            Some(if app.widget_supported() {
+                "available"
+            } else {
+                "unavailable"
+            }),
+            value(app.widget_status()),
         ))
         .child(setting(
             "Support",
