@@ -381,6 +381,12 @@ mod tests {
     }
 
     #[test]
+    fn default_is_raw_asr_plus_deterministic_repair() {
+        assert_eq!(crate::llm::LlmMode::default(), crate::llm::LlmMode::Off);
+        assert_eq!(AppConfig::default().llm_mode, crate::llm::LlmMode::Off);
+    }
+
+    #[test]
     fn parakeet_ultra_maps_to_its_own_bundle() {
         assert_eq!(
             super::AsrProfile::ParakeetUltra.model_id(),

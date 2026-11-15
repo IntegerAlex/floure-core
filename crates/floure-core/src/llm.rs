@@ -5,9 +5,9 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LlmMode {
     #[serde(rename = "off")]
+    #[default]
     Off,
     #[serde(rename = "cleanup")]
-    #[default]
     Cleanup,
     #[serde(rename = "bullet_list")]
     BulletList,
@@ -59,16 +59,17 @@ pub(crate) fn openrouter_api_key() -> Option<String> {
     std::env::var("OPENROUTER_API_KEY").ok()
 }
 
-pub const CLEANUP_PROMPT: &str = "Fix only clear errors in this transcript: remove filler words (um, uh), \
-fix obviously misheard words, add any missing punctuation and capitalization. \
-Preserve technical terms and all other wording. \
-Do not add or delete words: the output must contain the same number of words \
-as the input, apart from removed filler words. \
-If a word looks technical or rare, keep it exactly as given; never replace it \
-with a more common word. \
-If the transcript is already correct, return it unchanged. \
-IMPORTANT: Return ONLY the transcript text. \
-Do NOT add any labels, headers, commentary, safety ratings, or explanations.";
+pub const CLEANUP_PROMPT: &str = "You are a dictation cleanup pass. Return the SAME text with \
+corrected punctuation, capitalization, and spacing. \
+LANGUAGE: answer in the exact same language as the input. Never translate. \
+Fix ONLY clear transcription errors: a word that does not exist in the input's \
+language, or a missing accent or letter. Fix agreement only when it is plainly \
+wrong. \
+CHANGE NOTHING ELSE. Keep every valid word identical, including verb tense and \
+person. Do not add, remove, reorder, or translate anything. Preserve colloquial \
+and spoken forms exactly as dictated. \
+Reply with the final text and nothing else. Do not add labels, headers, \
+commentary, or explanations.";
 
 pub const BULLET_PROMPT: &str = "Convert the following microphone transcript into a clean, \
 well-structured bulleted list. Group related points together. \
@@ -108,6 +109,21 @@ pub fn max_transcript_bytes(backend: LlmBackend) -> usize {
     } else {
         1200
     }
+}
+
+/// Reject a polish result that is empty, null, or a summary rather than a
+/// punctuation pass. A 40% shrink is the measured signature of an LLM that
+/// answered the dictation instead of punctuating it; keep the deterministic
+/// text in that case.
+pub fn validate_polish(input: &str, output: &str) -> Option<String> {
+    let output = output.trim();
+    if output.is_empty() || output.eq_ignore_ascii_case("null") {
+        return None;
+    }
+    if !input.trim().is_empty() && output.len() * 100 < input.len() * 60 {
+        return None;
+    }
+    Some(output.to_string())
 }
 
 pub fn build_prompt(transcript: &str, mode: LlmMode) -> String {
@@ -579,10 +595,22 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_prompt_constrains_word_count() {
-        assert!(CLEANUP_PROMPT.contains("same number of words"));
-        assert!(CLEANUP_PROMPT.contains("never replace it"));
-        assert!(CLEANUP_PROMPT.contains("unchanged"));
+    fn cleanup_prompt_is_a_punctuation_pass_not_a_rewrite() {
+        assert!(CLEANUP_PROMPT.contains("Never translate"));
+        assert!(CLEANUP_PROMPT.contains("CHANGE NOTHING ELSE"));
+        assert!(CLEANUP_PROMPT.contains("Fix agreement only when it is plainly wrong"));
+    }
+
+    #[test]
+    fn polish_validation_rejects_summaries_and_empty_output() {
+        let input = "this is a long dictation with several words that must survive the pass";
+        assert!(validate_polish(input, "").is_none());
+        assert!(validate_polish(input, "null").is_none());
+        assert!(validate_polish(input, "This is a long dictation.").is_none());
+        assert_eq!(
+            validate_polish("hello there", "Hello there."),
+            Some("Hello there.".to_string())
+        );
     }
 
     #[test]
@@ -625,7 +653,7 @@ mod tests {
 
     #[test]
     fn cleanup_prompt_is_constrained() {
-        assert!(CLEANUP_PROMPT.contains("unchanged"));
+        assert!(CLEANUP_PROMPT.contains("exact same language"));
     }
 
     #[test]

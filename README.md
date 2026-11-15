@@ -46,6 +46,9 @@ cargo clippy --workspace -- -D warnings
 
 Without `mise`, install Rust 1.99.1 with rustup and run the same commands.
 The first build compiles sherpa-onnx and llama.cpp, so it takes a while.
+Builds are capped at two parallel jobs (`.cargo/config.toml` and `mise.toml`)
+to keep peak RAM under a 15 GB machine's budget. Inference is capped at four
+threads; `FLOURE_MAX_THREADS=1|2|3` lowers it further on a constrained laptop.
 
 Run it:
 
@@ -69,6 +72,19 @@ Run it:
 
 First run opens a three-step setup: microphone, model, trigger. It can be
 re-run from Configuration → General.
+
+### Text handling
+
+Dictation is raw ASR plus a deterministic repair pass by default: premature
+sentence breaks are rejoined, missing question marks are restored from
+structure, punctuation spacing and sentence-start casing are fixed, and a
+final full stop is added to prose. No model generates or removes words.
+
+**Polish** is the optional LLM pass (Configuration → Cleanup → Mode). It is
+off by default. When enabled, it uses a strict punctuation-only prompt, rejects
+empty or shortened results (a 60% length floor), and falls back to the
+deterministic text. The local Polish model must be downloaded first; the UI
+says so instead of silently passing raw text.
 
 ## Triggers
 

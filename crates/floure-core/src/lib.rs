@@ -19,6 +19,7 @@ pub mod output;
 pub mod parakeet;
 pub mod pipeline;
 pub mod sink;
+pub mod text;
 pub mod vad;
 pub mod whisper;
 
