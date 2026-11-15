@@ -149,6 +149,9 @@ impl AppHandle {
                     .unwrap_or("Could not deliver transcript")
                     .to_string(),
             }),
+            "partial" => self.sink.send(EngineEvent::Partial {
+                text: payload["text"].as_str().unwrap_or_default().to_string(),
+            }),
             "mic_level" => self
                 .sink
                 .send(EngineEvent::MicLevel(payload.as_f64().unwrap_or(0.0) as f32)),
@@ -246,6 +249,19 @@ mod tests {
             "one terminal state, no trailing events"
         );
         assert_eq!(sink.state(), EngineState::Idle);
+    }
+
+    #[test]
+    fn partial_text_is_display_only_on_the_event_stream() {
+        let (sink, mut rx) = EventSink::new();
+        sink.app_handle()
+            .emit("partial", serde_json::json!({"text": "so here is"}));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            EngineEvent::Partial {
+                text: "so here is".into()
+            }
+        );
     }
 
     #[test]

@@ -1235,6 +1235,13 @@ mod run_id_tests {
     /// The warm cache keys on everything that changes the engines: a missed
     /// field reuses a wrong recognizer/LLM instead of rebuilding.
     #[test]
+    fn preview_ignores_silence_and_short_buffers() {
+        assert!(super::decode_preview(&None, &None, "", &[0.0; 16_000]).is_none());
+        assert!(super::decode_preview(&None, &None, "", &[0.1; 100]).is_none());
+        assert!(super::decode_preview(&None, &None, "", &[0.1; 16_000]).is_none());
+    }
+
+    #[test]
     fn unloading_without_a_cache_is_safe() {
         crate::pipeline::unload_cached_engines();
         crate::pipeline::unload_cached_engines();
