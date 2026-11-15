@@ -162,7 +162,7 @@ const WH_WORDS: &[&str] = &[
 
 fn join_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(\S+?)([.!?])\s+(\p{Ll}[\p{L}']*)").expect("valid join regex"))
+    RE.get_or_init(|| Regex::new(r"(\S+?)(\.)\s+(\p{Ll}[\p{L}']*)").expect("valid join regex"))
 }
 
 fn terminal_re() -> &'static Regex {
@@ -247,6 +247,30 @@ fn reads_as_question(sentence: &str) -> bool {
             .is_some_and(|second| AUXILIARIES.contains(&second.as_str()));
     }
     false
+}
+
+/// Whether `next` continues the sentence `previous` rather than starting a
+/// new one. Used when VAD splits one spoken sentence into several segments.
+pub fn continues_sentence(previous: &str, next: &str) -> bool {
+    if next
+        .split_whitespace()
+        .next()
+        .and_then(|word| word.chars().next())
+        .is_some_and(|c| c.is_uppercase())
+    {
+        return false;
+    }
+    let next_word = next
+        .split_whitespace()
+        .next()
+        .map(bare_word)
+        .unwrap_or_default();
+    let previous_word = previous
+        .split_whitespace()
+        .last()
+        .map(bare_word)
+        .unwrap_or_default();
+    JOIN_AFTER.contains(&previous_word.as_str()) || JOIN_BEFORE.contains(&next_word.as_str())
 }
 
 /// Give a structurally interrogative sentence its question mark.
@@ -498,6 +522,23 @@ mod tests {
         );
         assert_eq!(ensure_terminal_punctuation("git status"), "git status");
         assert_eq!(ensure_terminal_punctuation("note:"), "note:");
+    }
+
+    #[test]
+    fn continuation_words_join_across_vad_segments() {
+        assert!(continues_sentence(
+            "So here is the testing.",
+            "of the application I'm running."
+        ));
+        assert!(continues_sentence(
+            "Currently I am not understanding what",
+            "can I do?"
+        ));
+        assert!(!continues_sentence(
+            "See you can see after testing there was a full stop.",
+            "then it should have capitalized the O."
+        ));
+        assert!(!continues_sentence("Mm-hmm.", "So here is the testing."));
     }
 
     #[test]

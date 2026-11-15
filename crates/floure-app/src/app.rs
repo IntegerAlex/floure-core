@@ -131,6 +131,9 @@ pub struct Utterance {
     pub raw: String,
     pub cleaned: String,
     pub streaming: bool,
+    /// True once the engine has assembled this group into one sentence and
+    /// run the deterministic/Polish pass over it.
+    pub finalized: bool,
 }
 
 impl Utterance {
@@ -140,6 +143,37 @@ impl Utterance {
         } else {
             &self.cleaned
         }
+    }
+}
+
+/// Replace the raw VAD lines of one assembled sentence with its final text.
+/// The worker may emit several `Final` events before one `CleanupDone`, so the
+/// panel must collapse them rather than showing a lower-case fragment as its
+/// own sentence.
+fn merge_finalized(utterances: &mut Vec<Utterance>, utterance_id: u64, text: String) {
+    let first = utterances
+        .iter()
+        .position(|line| !line.finalized && line.id <= utterance_id);
+    if let Some(first) = first {
+        let last = utterances
+            .iter()
+            .rposition(|line| !line.finalized && line.id <= utterance_id)
+            .unwrap_or(first);
+        utterances.drain(first..=last);
+        utterances.insert(
+            first,
+            Utterance {
+                id: utterance_id,
+                raw: text.clone(),
+                cleaned: text,
+                streaming: false,
+                finalized: true,
+            },
+        );
+    } else if let Some(line) = utterances.iter_mut().find(|line| line.id == utterance_id) {
+        line.cleaned = text;
+        line.streaming = false;
+        line.finalized = true;
     }
 }
 
@@ -418,6 +452,7 @@ impl FloureApp {
                     cleaned: String::new(),
                     raw: text,
                     streaming: false,
+                    finalized: false,
                 });
                 self.status = RunState::Transcribing;
             }
@@ -437,10 +472,7 @@ impl FloureApp {
                 }
             }
             EngineEvent::CleanupDone { utterance_id, text } => {
-                if let Some(line) = self.utterance(utterance_id) {
-                    line.cleaned = text;
-                    line.streaming = false;
-                }
+                merge_finalized(&mut self.utterances, utterance_id, text);
                 self.status = if self.recording {
                     RunState::Listening
                 } else {
@@ -486,9 +518,9 @@ impl FloureApp {
                 self.mic_level = 0.0;
             }
             EngineEvent::Cancelled { .. } => {
-                if let Some(line) = self.utterances.last_mut() {
-                    line.streaming = false;
-                }
+                // Drop the in-flight group entirely; its raw segments were
+                // never finalised and must not remain in the panel.
+                self.utterances.retain(|line| line.finalized);
                 self.status = RunState::Idle;
                 self.recording = false;
             }
@@ -1586,6 +1618,37 @@ mod tests {
         assert!(!can_advance(1, false));
         assert!(can_advance(1, true));
         assert!(can_advance(2, false));
+    }
+
+    #[test]
+    fn assembled_sentence_collapses_raw_vad_lines() {
+        let mut lines = vec![
+            Utterance {
+                id: 1,
+                raw: "So here is the testing.".into(),
+                cleaned: String::new(),
+                streaming: false,
+                finalized: false,
+            },
+            Utterance {
+                id: 2,
+                raw: "of the application I'm running.".into(),
+                cleaned: String::new(),
+                streaming: false,
+                finalized: false,
+            },
+        ];
+        merge_finalized(
+            &mut lines,
+            2,
+            "So here is the testing of the application I'm running.".into(),
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].text(),
+            "So here is the testing of the application I'm running."
+        );
+        assert!(lines[0].finalized);
     }
 
     #[test]

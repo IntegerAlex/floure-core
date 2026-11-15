@@ -80,6 +80,11 @@ sentence breaks are rejoined, missing question marks are restored from
 structure, punctuation spacing and sentence-start casing are fixed, and a
 final full stop is added to prose. No model generates or removes words.
 
+VAD segments are not sentences. The worker buffers consecutive segments and
+flushes one sentence group at a time, so a pause inside "the testing | of the
+application" becomes "the testing of the application", not a separately
+capitalised "Of the application".
+
 **Polish** is the optional LLM pass (Configuration → Cleanup → Mode). It is
 off by default. When enabled, it uses a strict punctuation-only prompt, rejects
 empty or shortened results (a 60% length floor), and falls back to the

@@ -420,10 +420,9 @@ fn transcribe_segment(
     parakeet: &Option<ParakeetRecognizer>,
     whisper: &Option<WhisperRecognizer>,
     hotwords: &str,
-    llm_processor: &mut LlmProcessor,
     run_id: u64,
     app: &crate::sink::AppHandle,
-) {
+) -> Option<(String, Vec<f32>, Vec<f32>)> {
     let start = Instant::now();
     eprintln!(
         "[pipeline] transcribing segment ({} samples)",
@@ -454,11 +453,11 @@ fn transcribe_segment(
     // ponytail: trim-guard, not is_empty — VAD noise segments decode to
     // whitespace (" "), which must never emit, type, or save as rows.
     if text.trim().is_empty() {
-        return;
+        return None;
     }
     // Cancelled or superseded while the decoder was busy: drop the result.
     if CANCELLED.load(Ordering::SeqCst) || !run_is_current(run_id) {
-        return;
+        return None;
     }
     let _ = app.emit(
         "asr_final",
@@ -468,7 +467,26 @@ fn transcribe_segment(
             "duration_sec": segment.len() as f64 / 16000.0,
         }),
     );
-    llm_processor.process(&text, &timestamps, &durations, run_id, app);
+    Some((text, timestamps, durations))
+}
+
+/// Whether a new VAD segment starts a new sentence. Segments are not
+/// sentences: a pause inside "the testing | of the application" must join,
+/// while "Mm-hmm. | So here..." is two.
+fn starts_new_sentence(previous: &str, next: &str) -> bool {
+    let previous = previous.trim_end();
+    if previous.is_empty() || !matches!(previous.chars().last(), Some('.' | '?' | '!')) {
+        return false;
+    }
+    let first = next.split_whitespace().next().unwrap_or("");
+    if first
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_uppercase() || c.is_ascii_digit())
+    {
+        return true;
+    }
+    !crate::text::continues_sentence(previous, next)
 }
 
 /// Build ASR recognizers for this config. Returns the pair plus whether the
@@ -917,7 +935,15 @@ impl PipelineController {
                 .checked_sub(Duration::from_millis(100))
                 .unwrap_or_else(Instant::now);
 
-            // Feed one chunk through VAD → ASR → LLM → output.
+            // Accumulate VAD segments into sentence groups. A segment is a
+            // pause boundary, not a sentence: joining before the deterministic
+            // pass is what keeps "the testing | of the application" one
+            // sentence instead of capitalising "Of".
+            let mut pending_text = String::new();
+            let mut pending_timestamps: Vec<f32> = Vec::new();
+            let mut pending_durations: Vec<f32> = Vec::new();
+
+            // Feed one chunk through VAD → ASR → sentence assembly → LLM → output.
             let mut pump = |samples: &[f32]| {
                 let resampled: Vec<f32> = if let Some(ref r) = resampler {
                     r.resample(samples, false)
@@ -937,15 +963,35 @@ impl PipelineController {
                 // stop path breaks out of the loop right after this, so
                 // anything still queued would be dropped unheard.
                 while let Some(segment) = vad.try_get_segment() {
-                    transcribe_segment(
+                    if let Some((text, timestamps, durations)) = transcribe_segment(
                         &segment,
                         &parakeet,
                         &whisper,
                         &config_clone.hotwords,
-                        &mut llm_processor,
                         run_id,
                         &app_clone,
-                    );
+                    ) {
+                        if starts_new_sentence(&pending_text, &text)
+                            && !pending_text.trim().is_empty()
+                        {
+                            llm_processor.process(
+                                &pending_text,
+                                &pending_timestamps,
+                                &pending_durations,
+                                run_id,
+                                &app_clone,
+                            );
+                            pending_text.clear();
+                            pending_timestamps.clear();
+                            pending_durations.clear();
+                        }
+                        if !pending_text.is_empty() {
+                            pending_text.push(' ');
+                        }
+                        pending_text.push_str(&text);
+                        pending_timestamps.extend(timestamps);
+                        pending_durations.extend(durations);
+                    }
                 }
                 vad.reset_after_segment();
             };
@@ -977,6 +1023,19 @@ impl PipelineController {
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
+            }
+
+            if !pending_text.trim().is_empty()
+                && run_is_current(run_id)
+                && !CANCELLED.load(Ordering::SeqCst)
+            {
+                llm_processor.process(
+                    &pending_text,
+                    &pending_timestamps,
+                    &pending_durations,
+                    run_id,
+                    &app_clone,
+                );
             }
 
             // Hand warm engines back for the next press.
@@ -1171,6 +1230,41 @@ mod cancel_tests {
         assert!(!run_is_current(run), "cancel must invalidate the run");
         assert!(!get_running_flag().load(Ordering::SeqCst));
         CANCELLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn vad_segments_assemble_into_one_sentence() {
+        let segments = [
+            "Mm-hmm.",
+            "So here is the testing.",
+            "of the application I'm running.",
+            "See you can see after testing there was a full stop.",
+            "then it should have capitalized the O of O.",
+        ];
+        let mut groups = Vec::new();
+        let mut current = String::new();
+        for segment in segments {
+            if starts_new_sentence(&current, segment) && !current.trim().is_empty() {
+                groups.push(current.trim().to_string());
+                current.clear();
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(segment);
+        }
+        if !current.trim().is_empty() {
+            groups.push(current.trim().to_string());
+        }
+        assert_eq!(groups.len(), 4);
+        assert_eq!(
+            crate::text::normalize(&groups[1]),
+            "So here is the testing of the application I'm running."
+        );
+        assert_eq!(
+            crate::text::normalize(&groups[3]),
+            "Then it should have capitalized the O of O."
+        );
     }
 
     #[test]
