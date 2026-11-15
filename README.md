@@ -75,11 +75,25 @@ re-run from Configuration → General.
 | Platform | How to start and stop |
 |---|---|
 | Linux X11 | Global shortcut (default `Ctrl+Shift+F12`), hold or toggle |
-| Linux Wayland | Bind `floure --toggle` in your compositor, use the tray, or POST to the loopback server |
+| Linux Wayland, `input` group | Global shortcut via evdev — works in any compositor, hold or toggle |
+| Linux Wayland, no `input` group | Bind `floure --toggle` in your compositor, use the tray, or POST to the loopback server |
 | Any | Tray menu (`Start recording` / `Stop recording`), or the microphone button in the window |
 
-Wayland has no reliable global key grab. Floure therefore runs a loopback
-control server on `127.0.0.1:17833` and ships a CLI:
+Wayland has no reliable global key grab, so Floure has three ways in:
+
+- **evdev (recommended):** reads `/dev/input/event*` directly. Add yourself to
+  the `input` group once, then log out and back in:
+
+  ```bash
+  sudo usermod -aG input $USER
+  ```
+
+  The device is never grabbed, so typing keeps working. The Shortcuts page
+  says when this is active and names the command when it is not.
+- **Compositor binding:** bind the loopback command to a key.
+- **Tray or in-app button.**
+
+The loopback control server runs on `127.0.0.1:17833` and ships a CLI:
 
 ```bash
 floure --toggle     # start/stop
@@ -89,6 +103,11 @@ floure --show       # raise the window
 floure --status     # JSON state
 floure --diagnostics
 ```
+
+A 240×56 status widget appears while an utterance is in flight: a layer-shell
+overlay on wlroots/Hyprland/sway, a borderless floating window on X11. It never
+takes keyboard focus, and compositors without `zwlr_layer_shell_v1` report why
+in Configuration → Diagnostics instead of failing silently.
 
 Hyprland example:
 
@@ -102,9 +121,10 @@ Sway example:
 bindsym $mod+d exec floure --toggle
 ```
 
-On GNOME Wayland, typing into other applications requires `ydotool`; without
-it Floure still copies the transcript to the clipboard. It never claims typing
-parity it cannot deliver.
+On Wayland, typing falls back from `wtype` to `dotool` then `ydotool`. On
+GNOME Wayland, typing into other applications therefore needs one of the
+uinput tools; without them Floure still copies the transcript to the clipboard.
+It never claims typing parity it cannot deliver.
 
 ## Data and privacy
 
