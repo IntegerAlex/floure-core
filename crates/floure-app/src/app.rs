@@ -370,9 +370,12 @@ impl FloureApp {
                 while let Ok(event) = rx.recv().await {
                     if this
                         .update(cx, |this, cx| {
-                            let stopped = matches!(event, EngineEvent::Stopped { .. });
+                            let idle_candidate = matches!(
+                                event,
+                                EngineEvent::Stopped { .. } | EngineEvent::AsrReady { .. }
+                            );
                             this.handle_event(event);
-                            if stopped {
+                            if idle_candidate {
                                 this.schedule_idle_unload(cx);
                             }
                             this.sync_widget(cx);
