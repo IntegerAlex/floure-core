@@ -600,11 +600,29 @@ fn cleanup(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             list = list.child(
                 div()
                     .py(theme::SPACE_3)
-                    .text_size(theme::TEXT_SM)
-                    .text_color(theme::error())
-                    .child(format!(
-                        "Polish is selected, but {} is not downloaded. Deterministic text is used until it is.",
-                        selected
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap(theme::SPACE_3)
+                    .child(
+                        div()
+                            .text_size(theme::TEXT_SM)
+                            .text_color(theme::error())
+                            .child(format!(
+                                "Polish is selected, but {} is not downloaded. Deterministic text is used until it is.",
+                                selected
+                            )),
+                    )
+                    .child(button(
+                        "disable-polish",
+                        "Turn off Polish",
+                        false,
+                        cx.listener(|this, _, _, cx| {
+                            this.config.llm_mode = LlmMode::Off;
+                            this.config_dirty = true;
+                            cx.notify();
+                        }),
                     )),
             );
         }
