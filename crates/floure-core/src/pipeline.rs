@@ -158,15 +158,32 @@ pub fn get_running_flag() -> &'static Arc<AtomicBool> {
     PIPELINE_RUNNING.get_or_init(|| Arc::new(AtomicBool::new(false)))
 }
 
+fn load_replacements() -> Vec<(String, String)> {
+    let path = history_db_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    crate::Dictionary::new(path)
+        .replacements()
+        .unwrap_or_default()
+}
+
 pub struct LlmProcessor {
     llm: Option<LlmCleanup>,
     config: AppConfig,
+    /// Dictionary phrase -> spelling, enforced after recognition.
+    replacements: Vec<(String, String)>,
 }
 
 impl LlmProcessor {
     pub fn new(config: AppConfig) -> Self {
+        let replacements = load_replacements();
         if config.llm_mode == LlmMode::Off {
-            return Self { llm: None, config };
+            return Self {
+                llm: None,
+                config,
+                replacements,
+            };
         }
         // Build the model path from the selected LLM model ID in config.
         // The manifest's `filename` field is the on-disk name; fall back to
@@ -202,14 +219,27 @@ impl LlmProcessor {
                 None
             }
         };
-        Self::from_cached(config, llm)
+        Self {
+            llm,
+            config,
+            replacements,
+        }
     }
 
     pub fn from_cached(config: AppConfig, llm: Option<LlmCleanup>) -> Self {
+        let replacements = load_replacements();
         if config.llm_mode == LlmMode::Off {
-            return Self { llm: None, config };
+            return Self {
+                llm: None,
+                config,
+                replacements,
+            };
         }
-        Self { llm, config }
+        Self {
+            llm,
+            config,
+            replacements,
+        }
     }
 
     pub fn into_llm(self) -> Option<LlmCleanup> {
@@ -228,10 +258,15 @@ impl LlmProcessor {
             return;
         }
         let mode = self.config.llm_mode;
+        let spoken = if self.config.spoken_punctuation {
+            crate::text::apply_spoken_punctuation(text)
+        } else {
+            text.to_string()
+        };
         // Deterministic repair first. It is cheap, local, and fixes the
         // mechanical artifacts (premature periods, missing question marks,
         // spacing, casing) before any optional model sees the text.
-        let normalized = crate::text::normalize(text);
+        let normalized = crate::text::normalize(&spoken);
         let cleaned: String;
 
         if mode == LlmMode::Off {
@@ -303,6 +338,7 @@ impl LlmProcessor {
         // including the skip and Off paths — so filler removal no longer
         // depends on the model, which is prone to eating real words next to them.
         let cleaned = crate::llm::strip_fillers(&cleaned);
+        let cleaned = crate::text::apply_replacements(&cleaned, &self.replacements);
         // ponytail: the decoder bleeds space runs onto utterance ends; trim
         // them. Internal newlines (bullet/email modes) are preserved.
         let cleaned = cleaned.trim().to_string();
@@ -468,6 +504,37 @@ fn transcribe_segment(
         }),
     );
     Some((text, timestamps, durations))
+}
+
+/// Decode the live buffer for display only. Same recognizers, no cleanup,
+/// no history, no output.
+fn decode_preview(
+    parakeet: &Option<ParakeetRecognizer>,
+    whisper: &Option<WhisperRecognizer>,
+    hotwords: &str,
+    samples: &[f32],
+) -> Option<String> {
+    if samples.len() < 8_000 {
+        return None;
+    }
+    let n = samples.len().max(1);
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt();
+    if rms < 0.006 {
+        return None;
+    }
+    let text = if let Some(rec) = parakeet {
+        let decoded = if hotwords.is_empty() {
+            rec.transcribe_full(samples)
+        } else {
+            rec.transcribe_full_with_hotwords(samples, hotwords)
+        };
+        decoded.map(|result| result.text).unwrap_or_default()
+    } else if let Some(ws) = whisper {
+        ws.transcribe(samples)
+    } else {
+        String::new()
+    };
+    (!text.trim().is_empty()).then_some(text)
 }
 
 /// Whether a new VAD segment starts a new sentence. Segments are not
@@ -942,6 +1009,8 @@ impl PipelineController {
             let mut pending_text = String::new();
             let mut pending_timestamps: Vec<f32> = Vec::new();
             let mut pending_durations: Vec<f32> = Vec::new();
+            let mut preview_buffer: Vec<f32> = Vec::new();
+            let mut last_preview = Instant::now();
 
             // Feed one chunk through VAD → ASR → sentence assembly → LLM → output.
             let mut pump = |samples: &[f32]| {
@@ -958,19 +1027,37 @@ impl PipelineController {
                         .clamp(0.0, 1.0);
                     let _ = app_clone.emit("mic_level", level);
                 }
+                preview_buffer.extend_from_slice(&resampled);
+                if preview_buffer.len() > 16000 * 8 {
+                    let drain = preview_buffer.len() - 16000 * 8;
+                    preview_buffer.drain(..drain);
+                }
+                if config_clone.live_partial
+                    && last_preview.elapsed() >= Duration::from_millis(900)
+                    && let Some(text) =
+                        decode_preview(&parakeet, &whisper, &config_clone.hotwords, &preview_buffer)
+                {
+                    last_preview = Instant::now();
+                    let _ = app_clone.emit("partial", serde_json::json!({ "text": text }));
+                }
                 vad.feed(&resampled);
                 // Drain every queued segment, not just the first one: the
                 // stop path breaks out of the loop right after this, so
                 // anything still queued would be dropped unheard.
                 while let Some(segment) = vad.try_get_segment() {
-                    if let Some((text, timestamps, durations)) = transcribe_segment(
+                    let decoded = transcribe_segment(
                         &segment,
                         &parakeet,
                         &whisper,
                         &config_clone.hotwords,
                         run_id,
                         &app_clone,
-                    ) {
+                    );
+                    // The segment owns this audio now; a stale preview must
+                    // not leak into the next sentence.
+                    preview_buffer.clear();
+                    last_preview = Instant::now();
+                    if let Some((text, timestamps, durations)) = decoded {
                         if starts_new_sentence(&pending_text, &text)
                             && !pending_text.trim().is_empty()
                         {
@@ -1076,6 +1163,26 @@ pub fn cancel_pipeline() {
     }
 }
 
+/// Drop the warm ASR/LLM engines after a period of inactivity. The next press
+/// rebuilds them on the worker thread; this is the memory/latency trade.
+pub fn unload_cached_engines() {
+    let _transition = TRANSITION.lock().unwrap_or_else(|e| e.into_inner());
+    if PIPELINE_RUNNING
+        .get()
+        .is_some_and(|flag| flag.load(Ordering::SeqCst))
+    {
+        return;
+    }
+    if let Some(cache) = ENGINE_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        eprintln!("[pipeline] idle: unloading warm engines");
+        drop(cache);
+    }
+}
+
 pub fn stop_pipeline() {
     // Order matters, and `TRANSITION` is what makes this order safe. The worker
     // checks its run id *before* the stop flag, so invalidating first sent it
@@ -1127,6 +1234,12 @@ mod run_id_tests {
 
     /// The warm cache keys on everything that changes the engines: a missed
     /// field reuses a wrong recognizer/LLM instead of rebuilding.
+    #[test]
+    fn unloading_without_a_cache_is_safe() {
+        crate::pipeline::unload_cached_engines();
+        crate::pipeline::unload_cached_engines();
+    }
+
     #[test]
     fn engine_key_covers_profile_language_hotwords_and_llm() {
         let base = AppConfig::default();
@@ -1272,6 +1385,7 @@ mod cancel_tests {
         let _serial = crate::pipeline::PIPELINE_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        CANCELLED.store(false, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("floure-text-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1332,10 +1446,16 @@ mod cancel_tests {
         processor.process("hello world", &[], &[], run_id, &app);
 
         assert!(rx.try_recv().is_err(), "cancelled audio must stay silent");
-        assert!(
-            !dir.join("history.db").exists(),
-            "cancelled audio must not be saved"
-        );
+        let rows = if dir.join("history.db").exists() {
+            let conn = crate::history::open(&dir.join("history.db")).unwrap();
+            conn.query_row("SELECT COUNT(*) FROM transcripts", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap()
+        } else {
+            0
+        };
+        assert_eq!(rows, 0, "cancelled audio must not be saved");
 
         CANCELLED.store(false, Ordering::SeqCst);
         // SAFETY: still serialised by SERIAL.

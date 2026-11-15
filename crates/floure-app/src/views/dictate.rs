@@ -310,7 +310,7 @@ fn transcript_panel(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement 
     }
     panel = panel.child(head);
 
-    if has_lines {
+    if has_lines || app.partial_text.is_some() {
         let start = app.utterances.len().saturating_sub(4);
         let mut lines = div()
             .flex()
@@ -337,6 +337,14 @@ fn transcript_panel(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement 
                         theme::text_muted()
                     })
                     .child(text),
+            );
+        }
+        if let Some(partial) = &app.partial_text {
+            lines = lines.child(
+                div()
+                    .text_size(theme::TEXT_XL)
+                    .text_color(theme::text_muted())
+                    .child(partial.clone()),
             );
         }
         panel = panel.child(lines);

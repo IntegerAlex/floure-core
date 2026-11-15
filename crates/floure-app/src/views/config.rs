@@ -801,6 +801,32 @@ fn output(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             ),
         ))
         .child(setting(
+            "Spoken punctuation",
+            Some("Turn \"comma\", \"new line\", \"open quote\" into symbols"),
+            toggle(
+                "toggle-spoken-punctuation",
+                "Spoken punctuation",
+                app.config.spoken_punctuation,
+                cx.listener(|this, _, _, cx| {
+                    this.toggle_spoken_punctuation();
+                    cx.notify();
+                }),
+            ),
+        ))
+        .child(setting(
+            "Live text",
+            Some("Show provisional words while speaking; only finished sentences are typed"),
+            toggle(
+                "toggle-live-partial",
+                "Live text",
+                app.config.live_partial,
+                cx.listener(|this, _, _, cx| {
+                    this.toggle_live_partial();
+                    cx.notify();
+                }),
+            ),
+        ))
+        .child(setting(
             "Delivery",
             Some("GNOME Wayland is clipboard-only unless ydotool is installed"),
             value(if cfg!(target_os = "linux") {

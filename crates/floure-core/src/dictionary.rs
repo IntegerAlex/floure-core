@@ -222,6 +222,19 @@ impl Dictionary {
         Ok((imported, skipped))
     }
 
+    /// Phrase -> replacement, longest phrase first so overlapping entries do
+    /// not shadow a more specific one. Used by the output pass after ASR.
+    pub fn replacements(&self) -> Result<Vec<(String, String)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT phrase, replacement FROM dictionary_entries
+             WHERE phrase != '' AND replacement != ''
+             ORDER BY LENGTH(phrase) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.filter_map(|row| row.ok()).collect())
+    }
+
     pub fn export_csv(&self) -> Result<String> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -343,6 +356,16 @@ mod tests {
         assert!(dict.list(None, None, true).unwrap()[0].is_favorite);
         assert_eq!(dict.toggle_favorite(id).unwrap(), Some(false));
         assert_eq!(dict.toggle_favorite(999).unwrap(), None);
+    }
+
+    #[test]
+    fn replacements_are_longest_first() {
+        let (_temp, dict) = dict();
+        dict.add("new york", "New York", None, None).unwrap();
+        dict.add("york", "York", None, None).unwrap();
+        let replacements = dict.replacements().unwrap();
+        assert_eq!(replacements[0].0, "new york");
+        assert_eq!(replacements.len(), 2);
     }
 
     #[test]

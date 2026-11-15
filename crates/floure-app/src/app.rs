@@ -207,6 +207,7 @@ pub struct FloureApp {
     pub status: RunState,
     pub utterances: Vec<Utterance>,
     pub transcript_copied: bool,
+    pub partial_text: Option<String>,
     pub session: Session,
     pub mic_level: f32,
     pub reduce_motion: bool,
@@ -316,6 +317,7 @@ impl FloureApp {
             },
             utterances: Vec::new(),
             transcript_copied: false,
+            partial_text: None,
             session: Session::default(),
             mic_level: 0.0,
             reduce_motion: detect_reduce_motion(),
@@ -368,7 +370,11 @@ impl FloureApp {
                 while let Ok(event) = rx.recv().await {
                     if this
                         .update(cx, |this, cx| {
+                            let stopped = matches!(event, EngineEvent::Stopped { .. });
                             this.handle_event(event);
+                            if stopped {
+                                this.schedule_idle_unload(cx);
+                            }
                             this.sync_widget(cx);
                             cx.notify();
                         })
@@ -438,6 +444,9 @@ impl FloureApp {
                 self.recording = state == EngineState::Listening;
             }
             EngineEvent::MicLevel(level) => self.mic_level = level,
+            EngineEvent::Partial { text } => {
+                self.partial_text = (!text.trim().is_empty()).then_some(text);
+            }
             EngineEvent::Final {
                 utterance_id,
                 text,
@@ -445,6 +454,7 @@ impl FloureApp {
                 ..
             } => {
                 self.transcript_copied = false;
+                self.partial_text = None;
                 self.session.speech_secs += duration_sec.max(0.0);
                 self.session.words += text.split_whitespace().count();
                 self.utterances.push(Utterance {
@@ -473,6 +483,7 @@ impl FloureApp {
             }
             EngineEvent::CleanupDone { utterance_id, text } => {
                 merge_finalized(&mut self.utterances, utterance_id, text);
+                self.partial_text = None;
                 self.status = if self.recording {
                     RunState::Listening
                 } else {
@@ -516,11 +527,13 @@ impl FloureApp {
                 self.status = RunState::Idle;
                 self.recording = false;
                 self.mic_level = 0.0;
+                self.partial_text = None;
             }
             EngineEvent::Cancelled { .. } => {
                 // Drop the in-flight group entirely; its raw segments were
                 // never finalised and must not remain in the panel.
                 self.utterances.retain(|line| line.finalized);
+                self.partial_text = None;
                 self.status = RunState::Idle;
                 self.recording = false;
             }
@@ -542,6 +555,24 @@ impl FloureApp {
                 }
             }
         }
+    }
+
+    /// Give a dictation machine back its RAM after a few idle minutes. A
+    /// later press rebuilds the cache; a running or listening engine is never
+    /// unloaded.
+    fn schedule_idle_unload(&self, cx: &mut Context<Self>) {
+        let Some(engine) = self.engine.clone() else {
+            return;
+        };
+        cx.spawn(async move |_this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(180))
+                .await;
+            if engine.state() == EngineState::Idle {
+                engine.unload_models();
+            }
+        })
+        .detach();
     }
 
     /// Keep the layer-shell widget in step with the engine. The widget owns
@@ -615,6 +646,7 @@ impl FloureApp {
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.utterances.clear();
         self.transcript_copied = false;
+        self.partial_text = None;
         self.session = Session::default();
         cx.notify();
     }
@@ -813,6 +845,8 @@ impl FloureApp {
             typing_enabled: self.config.typing_enabled,
             clipboard_enabled: self.config.clipboard_enabled,
             hotwords: self.config.hotwords.clone(),
+            spoken_punctuation: self.config.spoken_punctuation,
+            live_partial: self.config.live_partial,
         };
         if let Some(engine) = &self.engine {
             engine.apply_settings(update);
@@ -901,6 +935,34 @@ impl FloureApp {
     pub fn toggle_clipboard(&mut self) {
         self.config.clipboard_enabled = !self.config.clipboard_enabled;
         self.save_config_now();
+    }
+
+    pub fn toggle_spoken_punctuation(&mut self) {
+        self.config.spoken_punctuation = !self.config.spoken_punctuation;
+        self.apply_live_text_settings();
+    }
+
+    pub fn toggle_live_partial(&mut self) {
+        self.config.live_partial = !self.config.live_partial;
+        self.apply_live_text_settings();
+    }
+
+    fn apply_live_text_settings(&mut self) {
+        self.save_config_now();
+        if let Some(engine) = &self.engine {
+            engine.apply_settings(SettingsUpdate {
+                asr_profile: self.config.asr_profile.clone(),
+                language: self.config.language.clone(),
+                llm_provider: self.config.llm_provider.clone(),
+                llm_mode: self.config.llm_mode,
+                llm_model: self.config.llm_model.clone(),
+                typing_enabled: self.config.typing_enabled,
+                clipboard_enabled: self.config.clipboard_enabled,
+                hotwords: self.config.hotwords.clone(),
+                spoken_punctuation: self.config.spoken_punctuation,
+                live_partial: self.config.live_partial,
+            });
+        }
     }
 
     pub fn set_mic(&mut self, device: String) {
@@ -1009,6 +1071,8 @@ impl FloureApp {
                 typing_enabled: self.config.typing_enabled,
                 clipboard_enabled: self.config.clipboard_enabled,
                 hotwords: self.config.hotwords.clone(),
+                spoken_punctuation: self.config.spoken_punctuation,
+                live_partial: self.config.live_partial,
             });
         }
         cx.notify();

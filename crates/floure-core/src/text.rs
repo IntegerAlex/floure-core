@@ -418,12 +418,286 @@ pub fn ensure_terminal_punctuation(text: &str) -> String {
     format!("{trimmed}.")
 }
 
+const NUMBER_WORDS: &[(&str, u64)] = &[
+    ("zero", 0),
+    ("one", 1),
+    ("two", 2),
+    ("three", 3),
+    ("four", 4),
+    ("five", 5),
+    ("six", 6),
+    ("seven", 7),
+    ("eight", 8),
+    ("nine", 9),
+    ("ten", 10),
+    ("eleven", 11),
+    ("twelve", 12),
+    ("thirteen", 13),
+    ("fourteen", 14),
+    ("fifteen", 15),
+    ("sixteen", 16),
+    ("seventeen", 17),
+    ("eighteen", 18),
+    ("nineteen", 19),
+    ("twenty", 20),
+    ("thirty", 30),
+    ("forty", 40),
+    ("fifty", 50),
+    ("sixty", 60),
+    ("seventy", 70),
+    ("eighty", 80),
+    ("ninety", 90),
+    ("hundred", 100),
+    ("thousand", 1_000),
+    ("million", 1_000_000),
+    ("billion", 1_000_000_000),
+];
+
+fn number_value(word: &str) -> Option<u64> {
+    let word = word
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
+    NUMBER_WORDS
+        .iter()
+        .find(|(name, _)| *name == word)
+        .map(|(_, value)| *value)
+}
+
+/// Parse a run of number words (`twenty five`, `one hundred and five`) into a
+/// value. Returns how many whitespace tokens were consumed.
+fn parse_number_at(tokens: &[&str], start: usize) -> Option<(u64, usize)> {
+    let mut total: u64 = 0;
+    let mut current: u64 = 0;
+    let mut used = 0;
+    let mut saw_number = false;
+    for (offset, token) in tokens.iter().enumerate().skip(start) {
+        let cleaned = token.trim_matches(|c: char| !c.is_alphanumeric());
+        if cleaned.eq_ignore_ascii_case("and") && saw_number {
+            used = offset - start + 1;
+            continue;
+        }
+        let Some(value) = number_value(cleaned) else {
+            break;
+        };
+        saw_number = true;
+        used = offset - start + 1;
+        match value {
+            100 => current = current.max(1) * 100,
+            1_000.. => {
+                total += current.max(1) * value;
+                current = 0;
+            }
+            _ => current += value,
+        }
+    }
+    saw_number.then_some((total + current, used))
+}
+
+fn trailing_suffix(token: &str) -> &str {
+    token.trim_start_matches(|c: char| c.is_alphanumeric() || c == '.')
+}
+
+/// Turn dictated quantities into written forms. Narrow on purpose: a number
+/// word without a currency, time, percent or unit marker is left as prose
+/// ("one of the things" must not become "1 of the things").
+pub fn format_numbers(text: &str) -> String {
+    let lines: Vec<String> = text
+        .split('\n')
+        .map(|line| {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+            let mut i = 0;
+            while i < tokens.len() {
+                let Some((value, used)) = parse_number_at(&tokens, i) else {
+                    out.push(tokens[i].to_string());
+                    i += 1;
+                    continue;
+                };
+                let next = tokens.get(i + used).copied().unwrap_or("");
+                let marker = next
+                    .trim_matches(|c: char| !c.is_alphanumeric() && c != '.')
+                    .to_lowercase();
+                let suffix = trailing_suffix(next);
+                match marker.as_str() {
+                    "dollar" | "dollars" | "euro" | "euros" | "pound" | "pounds" => {
+                        let symbol = match marker.as_str() {
+                            "euro" | "euros" => "€",
+                            "pound" | "pounds" => "£",
+                            _ => "$",
+                        };
+                        // "and fifty cents" immediately after the currency.
+                        let mut cents = 0;
+                        let mut consumed = used + 1;
+                        let has_and = tokens.get(i + consumed).is_some_and(|word| {
+                            word.trim_matches(|c: char| !c.is_alphanumeric())
+                                .eq_ignore_ascii_case("and")
+                        });
+                        let cents_parse = has_and
+                            .then(|| parse_number_at(&tokens, i + consumed + 1))
+                            .flatten();
+                        if let Some((cent_value, cent_used)) = cents_parse {
+                            let cent_word = tokens
+                                .get(i + consumed + 1 + cent_used)
+                                .copied()
+                                .unwrap_or("");
+                            if cent_word
+                                .trim_matches(|c: char| !c.is_alphanumeric())
+                                .eq_ignore_ascii_case("cents")
+                                || cent_word
+                                    .trim_matches(|c: char| !c.is_alphanumeric())
+                                    .eq_ignore_ascii_case("cent")
+                            {
+                                cents = cent_value.min(99);
+                                consumed += 2 + cent_used;
+                            }
+                        }
+                        out.push(if cents > 0 {
+                            format!("{symbol}{value}.{cents:02}{suffix}")
+                        } else {
+                            format!("{symbol}{value}{suffix}")
+                        });
+                        i += consumed;
+                    }
+                    "percent" => {
+                        out.push(format!("{value}%{suffix}"));
+                        i += used + 1;
+                    }
+                    "a.m." | "p.m." | "am" | "pm" | "o'clock" | "oclock" => {
+                        // "three thirty" is 3:30, not the number thirty-three:
+                        // read the hour and minute as separate fields.
+                        let hour = number_value(tokens[i]).unwrap_or(0);
+                        let minute = if used >= 2 {
+                            number_value(tokens[i + 1]).unwrap_or(0)
+                        } else {
+                            0
+                        };
+                        if (1..=12).contains(&hour) && minute < 60 {
+                            let marker = match marker.as_str() {
+                                "am" => "a.m.".to_string(),
+                                "pm" => "p.m.".to_string(),
+                                other => other.to_string(),
+                            };
+                            if minute == 0 {
+                                out.push(format!("{hour} {marker}"));
+                            } else {
+                                out.push(format!("{hour}:{minute:02} {marker}"));
+                            }
+                            i += used + 1;
+                        } else {
+                            out.push(tokens[i].to_string());
+                            i += 1;
+                        }
+                    }
+                    "minute" | "minutes" | "hour" | "hours" | "day" | "days" | "week" | "weeks"
+                    | "month" | "months" | "year" | "years" | "megabyte" | "megabytes"
+                    | "gigabyte" | "gigabytes" | "kilometre" | "kilometres" | "kilometer"
+                    | "kilometers" | "mile" | "miles" | "degree" | "degrees" => {
+                        out.push(format!("{value}{suffix}"));
+                        i += used;
+                    }
+                    _ => {
+                        out.push(tokens[i].to_string());
+                        i += 1;
+                    }
+                }
+            }
+            out.join(" ")
+        })
+        .collect();
+    lines.join("\n")
+}
+
+/// Spoken punctuation is opt-in. Replace only the whole word (ignoring
+/// surrounding punctuation) so "comma" becomes a comma while "commander"
+/// does not.
+pub fn apply_spoken_punctuation(text: &str) -> String {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        let word = tokens[i]
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase();
+        let pair = tokens.get(i + 1).map(|next| {
+            next.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        });
+        let (symbol, used) = match (word.as_str(), pair.as_deref()) {
+            ("full", Some("stop")) | ("period", _) => (
+                ".",
+                if pair.as_deref() == Some("stop") {
+                    2
+                } else {
+                    1
+                },
+            ),
+            ("comma", _) => (",", 1),
+            ("question", Some("mark")) => ("?", 2),
+            ("exclamation", Some("mark")) | ("exclamation", Some("point")) => ("!", 2),
+            ("colon", _) => (":", 1),
+            ("semicolon", _) | ("semi", Some("colon")) => (";", if word == "semi" { 2 } else { 1 }),
+            ("new", Some("line")) => ("\n", 2),
+            ("new", Some("paragraph")) => ("\n\n", 2),
+            ("open", Some("quote")) | ("quote", _) => ("\"", if word == "open" { 2 } else { 1 }),
+            ("close", Some("quote")) => ("\"", 2),
+            ("open", Some("parenthesis")) | ("open", Some("paren")) => ("(", 2),
+            ("close", Some("parenthesis")) | ("close", Some("paren")) => (")", 2),
+            ("dash", _) | ("hyphen", _) => ("-", 1),
+            _ => {
+                out.push(tokens[i].to_string());
+                i += 1;
+                continue;
+            }
+        };
+        out.push(symbol.to_string());
+        i += used;
+    }
+    out.join(" ")
+}
+
+/// Enforce dictionary spellings on the final transcript. Whole-word and
+/// case-insensitive: "tauri" becomes "Tauri" and "Tauri app" can be replaced
+/// as one phrase.
+pub fn apply_replacements(text: &str, replacements: &[(String, String)]) -> String {
+    let mut out = text.to_string();
+    for (phrase, replacement) in replacements.iter().take(200) {
+        if phrase.trim().is_empty() || phrase == replacement {
+            continue;
+        }
+        let escaped = regex::escape(phrase.trim());
+        let starts_word = phrase
+            .trim()
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric());
+        let ends_word = phrase
+            .trim()
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_alphanumeric());
+        let pattern = format!(
+            "{}{}{}",
+            if starts_word { r"\b" } else { "" },
+            escaped,
+            if ends_word { r"\b" } else { "" }
+        );
+        if let Ok(regex) = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(true)
+            .build()
+        {
+            out = regex.replace_all(&out, replacement.as_str()).into_owned();
+        }
+    }
+    out
+}
+
 /// The deterministic repair chain. No words are generated or removed.
 pub fn normalize(text: &str) -> String {
     if text.trim().is_empty() {
         return String::new();
     }
-    let repaired = repair_sentence_breaks(text);
+    let numbered = format_numbers(text);
+    let repaired = repair_sentence_breaks(&numbered);
     let questioned = restore_question_marks(&repaired);
     let spaced = normalize_spacing(&questioned);
     let cased = capitalize_sentences(&spaced);
@@ -522,6 +796,60 @@ mod tests {
         );
         assert_eq!(ensure_terminal_punctuation("git status"), "git status");
         assert_eq!(ensure_terminal_punctuation("note:"), "note:");
+    }
+
+    #[test]
+    fn formats_money_time_percent_and_units() {
+        assert_eq!(format_numbers("twenty five dollars"), "$25");
+        assert_eq!(
+            format_numbers("twenty five dollars and fifty cents"),
+            "$25.50"
+        );
+        assert_eq!(format_numbers("three thirty p.m."), "3:30 p.m.");
+        assert_eq!(format_numbers("ten percent"), "10%");
+        assert_eq!(format_numbers("five minutes"), "5 minutes");
+    }
+
+    #[test]
+    fn leaves_bare_number_words_as_prose() {
+        assert_eq!(format_numbers("one of the things"), "one of the things");
+        assert_eq!(
+            format_numbers("version three point thirty"),
+            "version three point thirty"
+        );
+    }
+
+    #[test]
+    fn replacements_are_whole_word_and_case_insensitive() {
+        let replacements = vec![
+            ("tauri".to_string(), "GPUI".to_string()),
+            ("open router".to_string(), "OpenRouter".to_string()),
+        ];
+        assert_eq!(
+            apply_replacements("the Tauri app uses open router", &replacements),
+            "the GPUI app uses OpenRouter"
+        );
+        assert_eq!(
+            apply_replacements("taurine is not tauri", &replacements),
+            "taurine is not GPUI"
+        );
+    }
+
+    #[test]
+    fn spoken_punctuation_is_opt_in_and_word_exact() {
+        assert_eq!(
+            apply_spoken_punctuation("hello comma world period"),
+            "hello , world ."
+        );
+        assert_eq!(
+            apply_spoken_punctuation("open quote ship it close quote"),
+            "\" ship it \""
+        );
+        assert_eq!(apply_spoken_punctuation("commander comma"), "commander ,");
+        assert_eq!(
+            apply_spoken_punctuation("first line new line second"),
+            "first line \n second"
+        );
     }
 
     #[test]

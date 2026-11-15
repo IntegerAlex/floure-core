@@ -85,6 +85,19 @@ flushes one sentence group at a time, so a pause inside "the testing | of the
 application" becomes "the testing of the application", not a separately
 capitalised "Of the application".
 
+Quantities are normalised too: `"three thirty p.m."` becomes `"3:30 p.m."`,
+`"twenty five dollars"` becomes `"$25"`, and `"ten percent"` becomes `"10%"`.
+Dictionary entries are applied again after recognition, so a spelling is
+enforced even when the ASR or Polish pass gets it wrong. Spoken punctuation
+(`"comma"`, `"new line"`, `"open quote"`) is an opt-in switch in
+Configuration → Output.
+
+**Live text** shows provisional words while a sentence is still being spoken.
+It is display-only: nothing is typed, cleaned, or saved until the sentence is
+finished. It is on by default and can be turned off in Configuration → Output.
+The ASR model is unloaded after three idle minutes and rebuilt on the next
+press, which keeps idle RAM low.
+
 **Polish** is the optional LLM pass (Configuration → Cleanup → Mode). It is
 off by default. When enabled, it uses a strict punctuation-only prompt, rejects
 empty or shortened results (a 60% length floor), and falls back to the

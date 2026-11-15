@@ -71,6 +71,14 @@ pub struct AppConfig {
     /// biased decode path entirely (see `pipeline.rs`).
     #[serde(default)]
     pub hotwords: String,
+    /// Convert "comma"/"new line"/"open quote" into symbols. Off by default:
+    /// ordinary prose says these words too.
+    #[serde(default)]
+    pub spoken_punctuation: bool,
+    /// Show a provisional transcript while the current sentence is still
+    /// being spoken. Display only; never typed or saved.
+    #[serde(default = "default_true")]
+    pub live_partial: bool,
     pub model_dir: PathBuf,
 
     // ---- Migrated from the Tauri webview's localStorage ----
@@ -138,6 +146,8 @@ impl Default for AppConfig {
             typing_enabled: true,
             clipboard_enabled: true,
             hotwords: String::new(),
+            spoken_punctuation: false,
+            live_partial: true,
             model_dir,
             hotkey: default_hotkey(),
             ptt_mode: PttMode::Hold,
@@ -170,6 +180,10 @@ pub struct SettingsUpdate {
     pub clipboard_enabled: bool,
     #[serde(default)]
     pub hotwords: String,
+    #[serde(default)]
+    pub spoken_punctuation: bool,
+    #[serde(default = "default_true")]
+    pub live_partial: bool,
 }
 
 /// Hotwords arrive as the UI's comma-separated list; sherpa-onnx wants a
@@ -343,6 +357,8 @@ impl AppConfig {
         self.typing_enabled = update.typing_enabled;
         self.clipboard_enabled = update.clipboard_enabled;
         self.hotwords = normalize_hotwords(&update.hotwords);
+        self.spoken_punctuation = update.spoken_punctuation;
+        self.live_partial = update.live_partial;
     }
 }
 
@@ -382,8 +398,11 @@ mod tests {
 
     #[test]
     fn default_is_raw_asr_plus_deterministic_repair() {
+        let config = AppConfig::default();
         assert_eq!(crate::llm::LlmMode::default(), crate::llm::LlmMode::Off);
-        assert_eq!(AppConfig::default().llm_mode, crate::llm::LlmMode::Off);
+        assert_eq!(config.llm_mode, crate::llm::LlmMode::Off);
+        assert!(!config.spoken_punctuation, "spoken punctuation is opt-in");
+        assert!(config.live_partial, "live text is on by default");
     }
 
     #[test]
@@ -431,6 +450,8 @@ mod tests {
             typing_enabled: true,
             clipboard_enabled: true,
             hotwords: "Calico, Kaliko".to_string(),
+            spoken_punctuation: false,
+            live_partial: true,
         });
         assert_eq!(config.hotwords, "Calico Kaliko");
     }
@@ -480,6 +501,8 @@ mod tests {
             typing_enabled: false,
             clipboard_enabled: false,
             hotwords: String::new(),
+            spoken_punctuation: false,
+            live_partial: true,
         };
         let dir = config.model_dir.clone();
         config.apply_update(update);

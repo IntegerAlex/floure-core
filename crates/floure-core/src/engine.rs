@@ -122,6 +122,12 @@ impl Engine {
         self.sink.send(EngineEvent::Stopped { flushed: true });
     }
 
+    /// Release the warm model cache. Called after a long idle period; the
+    /// next start reloads from disk.
+    pub fn unload_models(&self) {
+        crate::pipeline::unload_cached_engines();
+    }
+
     pub fn cancel(&self) {
         crate::pipeline::cancel_pipeline();
         self.started.store(false, Ordering::SeqCst);

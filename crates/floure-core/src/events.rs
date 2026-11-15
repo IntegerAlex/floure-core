@@ -22,6 +22,11 @@ pub enum EngineState {
 pub enum EngineEvent {
     State(EngineState),
     MicLevel(f32),
+    /// Provisional text for the sentence currently being spoken. Display
+    /// only: never typed, saved, or sent to cleanup.
+    Partial {
+        text: String,
+    },
     Final {
         utterance_id: u64,
         text: String,
