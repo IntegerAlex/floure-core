@@ -109,10 +109,19 @@ fn mic_button(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
 
 pub fn shortcut_display(status: &HotkeyStatus, hotkey: &str) -> (String, Option<String>) {
     match status {
-        HotkeyStatus::Registered(_) => (crate::app::display_hotkey(hotkey), None),
+        HotkeyStatus::RegisteredEvdev(_) | HotkeyStatus::RegisteredX11(_) => {
+            (crate::app::display_hotkey(hotkey), None)
+        }
         HotkeyStatus::Failed(error) => (
             "Shortcut unavailable".to_string(),
             Some(format!("Use the tray or run floure --toggle ({error})")),
+        ),
+        HotkeyStatus::NeedsInputGroup => (
+            "Global shortcut needs the input group".to_string(),
+            Some(format!(
+                "Run {} then log out and back in",
+                crate::hotkeys::INPUT_GROUP_COMMAND
+            )),
         ),
         HotkeyStatus::Unavailable => (
             "floure --toggle".to_string(),
@@ -121,9 +130,23 @@ pub fn shortcut_display(status: &HotkeyStatus, hotkey: &str) -> (String, Option<
     }
 }
 
+/// What the shortcut chip copies: the fix for the current status, never a
+/// command that does not apply.
+pub fn shortcut_copy(status: &HotkeyStatus) -> &'static str {
+    match status {
+        HotkeyStatus::NeedsInputGroup => crate::hotkeys::INPUT_GROUP_COMMAND,
+        _ => "floure --toggle",
+    }
+}
+
 fn shortcut_pill(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
     let (text, hint) = shortcut_display(&app.hotkey_status, &app.config.hotkey);
-    let actionable = !matches!(app.hotkey_status, HotkeyStatus::Registered(_));
+    let registered = matches!(
+        app.hotkey_status,
+        HotkeyStatus::RegisteredEvdev(_) | HotkeyStatus::RegisteredX11(_)
+    );
+    let actionable = !registered;
+    let copy = shortcut_copy(&app.hotkey_status);
     let mut chip = div()
         .id("copy-trigger")
         .role(gpui::Role::Button)
@@ -140,9 +163,7 @@ fn shortcut_pill(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
         chip = chip
             .cursor_pointer()
             .hover(|style| style.bg(theme::raised()))
-            .on_click(
-                cx.listener(|this, _, _, cx| this.copy_to_clipboard_text("floure --toggle", cx)),
-            );
+            .on_click(cx.listener(move |this, _, _, cx| this.copy_to_clipboard_text(copy, cx)));
     }
     let mut pill = div()
         .flex()
@@ -326,7 +347,9 @@ fn transcript_panel(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement 
             "Working on it…"
         } else {
             match app.hotkey_status {
-                HotkeyStatus::Registered(_) => "Press the shortcut and speak",
+                HotkeyStatus::RegisteredEvdev(_) | HotkeyStatus::RegisteredX11(_) => {
+                    "Press the shortcut and speak"
+                }
                 _ => "Trigger dictation and speak",
             }
         };
@@ -423,10 +446,30 @@ mod tests {
         assert!(hint.is_some_and(|hint| hint.contains("floure --toggle")));
 
         let (text, hint) = shortcut_display(
-            &HotkeyStatus::Registered("Ctrl+Shift+F12".into()),
+            &HotkeyStatus::RegisteredEvdev("Ctrl+Shift+F12".into()),
             "CommandOrControl+Shift+F12",
         );
         assert_eq!(text, "Ctrl + Shift + F12");
         assert!(hint.is_none());
+        assert_eq!(
+            shortcut_copy(&HotkeyStatus::RegisteredEvdev("Ctrl+Shift+F12".into())),
+            "floure --toggle"
+        );
+    }
+
+    /// The Wayland-without-input-group state must name the exact fix, not just
+    /// say "unavailable".
+    #[test]
+    fn missing_input_group_names_the_command_and_the_relogin() {
+        let (text, hint) =
+            shortcut_display(&HotkeyStatus::NeedsInputGroup, "CommandOrControl+Shift+F12");
+        assert!(text.contains("input group"));
+        let hint = hint.expect("hint with the fix");
+        assert!(hint.contains("sudo usermod -aG input $USER"));
+        assert!(hint.contains("log out and back in"));
+        assert_eq!(
+            shortcut_copy(&HotkeyStatus::NeedsInputGroup),
+            "sudo usermod -aG input $USER"
+        );
     }
 }

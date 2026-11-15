@@ -331,7 +331,7 @@ impl LlmProcessor {
                     // ponytail: platform hint only; the tool name differs per
                     // OS and a wrong hint here already cost a debug round.
                     let hint = match std::env::consts::OS {
-                        "linux" => "xdotool (X11) or wtype (Wayland)",
+                        "linux" => "wtype, dotool or ydotool (Wayland), or xdotool (X11)",
                         "windows" => "clipboard (clip.exe) + Ctrl+V paste",
                         _ => "the system typing helper",
                     };

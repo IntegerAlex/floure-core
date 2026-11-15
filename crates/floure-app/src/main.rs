@@ -5,6 +5,7 @@ mod hotkeys;
 mod theme;
 mod tray;
 mod views;
+mod widget;
 
 use std::sync::Arc;
 

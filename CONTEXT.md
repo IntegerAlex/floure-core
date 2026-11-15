@@ -20,8 +20,10 @@ for the local path.
   - Lifecycle and events: `engine.rs`, `events.rs`, `sink.rs`.
   - Data: `history.rs` (FTS5), `dictionary.rs`, `insights.rs`, `config.rs`,
     `migrate.rs`, `diagnostics.rs`.
-- **Integration:** `ksni` tray, `global-hotkey` on X11, loopback server and CLI
-  in `crates/floure-app/src/control_server.rs`.
+- **Integration:** `ksni` tray, `global-hotkey` on X11/Windows/macOS, evdev
+  `/dev/input` listener on Linux Wayland (`input` group, opt-in), a status-only
+  layer-shell widget, and the loopback server and CLI in
+  `crates/floure-app/src/control_server.rs`.
 
 ## Key paths
 

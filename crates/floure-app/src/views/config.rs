@@ -10,6 +10,7 @@ use gpui::{
 use gpui_component::input::Input;
 
 use crate::app::FloureApp;
+use crate::hotkeys::HotkeyStatus;
 use crate::theme;
 use floure_core::config::{AsrProfile, LlmProvider, PttMode};
 use floure_core::llm::LlmMode;
@@ -219,21 +220,42 @@ fn general(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
 }
 
 fn shortcuts(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
-    let on_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let (status, status_hint) = match &app.hotkey_status {
+        HotkeyStatus::RegisteredEvdev(_) => ("Active · evdev (works on Wayland)", None),
+        HotkeyStatus::RegisteredX11(_) => ("Active · global-hotkey", None),
+        HotkeyStatus::NeedsInputGroup => (
+            "Needs the input group",
+            Some(format!(
+                "{} then log out and back in",
+                crate::hotkeys::INPUT_GROUP_COMMAND
+            )),
+        ),
+        HotkeyStatus::Unavailable => (
+            "Not available here",
+            Some("Bind the loopback command in your compositor".to_string()),
+        ),
+        HotkeyStatus::Failed(error) => ("Unavailable", Some(error.clone())),
+    };
     let command = "floure --toggle";
     let mut list = div().flex().flex_col();
     list = list.child(setting(
         "Global shortcut",
-        Some(if on_wayland {
-            "Global shortcuts are not available on Wayland"
-        } else {
-            "Used when Floure is running"
-        }),
-        value(if on_wayland {
-            "Use a compositor binding".to_string()
-        } else {
-            crate::app::display_hotkey(&app.config.hotkey)
-        }),
+        status_hint.as_deref().or(Some(status)),
+        value(
+            if matches!(
+                app.hotkey_status,
+                HotkeyStatus::RegisteredEvdev(_) | HotkeyStatus::RegisteredX11(_)
+            ) {
+                crate::app::display_hotkey(&app.config.hotkey)
+            } else {
+                status.to_string()
+            },
+        ),
+    ));
+    list = list.child(setting(
+        "Status widget",
+        Some("Layer-shell overlay shown while dictating"),
+        value(app.widget_status()),
     ));
     list = list.child(setting(
         "Loopback command",
@@ -833,6 +855,15 @@ fn diagnostics(app: &FloureApp, cx: &mut Context<FloureApp>) -> AnyElement {
             "Models",
             None,
             value(app.config.model_dir.display().to_string()),
+        ))
+        .child(setting(
+            "Status widget",
+            Some(if app.widget_supported() {
+                "available"
+            } else {
+                "unavailable"
+            }),
+            value(app.widget_status()),
         ))
         .child(setting(
             "Support",
