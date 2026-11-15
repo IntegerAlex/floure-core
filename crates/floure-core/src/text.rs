@@ -494,7 +494,7 @@ fn parse_number_at(tokens: &[&str], start: usize) -> Option<(u64, usize)> {
 }
 
 fn trailing_suffix(token: &str) -> &str {
-    token.trim_start_matches(|c: char| c.is_alphanumeric() || c == '.')
+    token.trim_start_matches(|c: char| c.is_alphanumeric())
 }
 
 /// Turn dictated quantities into written forms. Narrow on purpose: a number
@@ -527,6 +527,7 @@ pub fn format_numbers(text: &str) -> String {
                         };
                         // "and fifty cents" immediately after the currency.
                         let mut cents = 0;
+                        let mut cents_suffix = "";
                         let mut consumed = used + 1;
                         let has_and = tokens.get(i + consumed).is_some_and(|word| {
                             word.trim_matches(|c: char| !c.is_alphanumeric())
@@ -548,11 +549,12 @@ pub fn format_numbers(text: &str) -> String {
                                     .eq_ignore_ascii_case("cent")
                             {
                                 cents = cent_value.min(99);
+                                cents_suffix = trailing_suffix(cent_word);
                                 consumed += 2 + cent_used;
                             }
                         }
                         out.push(if cents > 0 {
-                            format!("{symbol}{value}.{cents:02}{suffix}")
+                            format!("{symbol}{value}.{cents:02}{cents_suffix}")
                         } else {
                             format!("{symbol}{value}{suffix}")
                         });
@@ -804,6 +806,10 @@ mod tests {
         assert_eq!(
             format_numbers("twenty five dollars and fifty cents"),
             "$25.50"
+        );
+        assert_eq!(
+            format_numbers("it costs twenty five dollars and fifty cents."),
+            "it costs $25.50."
         );
         assert_eq!(format_numbers("three thirty p.m."), "3:30 p.m.");
         assert_eq!(format_numbers("ten percent"), "10%");
