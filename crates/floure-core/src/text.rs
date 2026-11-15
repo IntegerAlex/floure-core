@@ -254,17 +254,17 @@ pub fn restore_question_marks(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for chunk in terminal_re().find_iter(text) {
         let sentence = chunk.as_str();
-        if sentence.ends_with('.') && reads_as_question(sentence) {
+        let trimmed = sentence.trim_end();
+        let has_terminal = matches!(trimmed.chars().last(), Some('.' | '?' | '!'));
+        if trimmed.ends_with('.') && reads_as_question(trimmed) {
             out.push_str(&sentence[..sentence.len() - 1]);
+            out.push('?');
+        } else if !has_terminal && reads_as_question(trimmed) {
+            out.push_str(trimmed);
             out.push('?');
         } else {
             out.push_str(sentence);
         }
-    }
-    let trimmed = out.trim_end();
-    let has_terminal = matches!(trimmed.chars().last(), Some('.' | '?' | '!'));
-    if !has_terminal && reads_as_question(trimmed) {
-        out = format!("{trimmed}?");
     }
     out
 }
@@ -454,6 +454,10 @@ mod tests {
             restore_question_marks("How are you. I am fine."),
             "How are you? I am fine."
         );
+        assert_eq!(
+            restore_question_marks("Hello. how are you"),
+            "Hello. how are you?"
+        );
     }
 
     #[test]
@@ -506,5 +510,6 @@ mod tests {
             normalize("hello , world . how are you ?"),
             "Hello, world. How are you?"
         );
+        assert_eq!(normalize("hello. how are you"), "Hello. How are you?");
     }
 }
