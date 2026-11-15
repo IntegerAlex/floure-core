@@ -218,7 +218,7 @@ impl WidgetHost {
     }
 
     fn open(&mut self, cx: &mut App) {
-        if self.window.is_some() {
+        if self.window.is_some() || !self.supported() {
             return;
         }
         let options = self.options(cx);
