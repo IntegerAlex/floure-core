@@ -149,6 +149,7 @@ fn toggle(engine: &Engine) {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub struct Modifiers {
     pub ctrl: bool,
     pub shift: bool,
@@ -156,6 +157,7 @@ pub struct Modifiers {
     pub super_key: bool,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl Modifiers {
     /// Canonical chord spelling for status text, e.g. `Ctrl+Shift+F12`.
     pub fn label(self) -> String {
@@ -178,12 +180,14 @@ impl Modifiers {
 
 /// A parsed chord: zero or more modifiers and exactly one key.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub struct Binding {
     pub modifiers: Modifiers,
     /// Canonical key name: `F12`, `A`, `SPACE`, `PAGEUP`, …
     pub key: String,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl Binding {
     pub fn label(&self) -> String {
         let modifiers = self.modifiers.label();
@@ -197,6 +201,7 @@ impl Binding {
 
 /// Parse the stored hotkey (`CommandOrControl+Shift+F12`) into modifiers and a
 /// canonical key name. Unknown keys are an error, never a silent no-op.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn parse_binding(hotkey: &str) -> Result<Binding, String> {
     let mut modifiers = Modifiers::default();
     let mut key = None;
@@ -224,6 +229,7 @@ pub fn parse_binding(hotkey: &str) -> Result<Binding, String> {
     Ok(Binding { modifiers, key })
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn canonical_key(part: &str) -> Result<String, String> {
     // Tauri/KeyboardEvent spelling: `KeyQ`, `Digit1`.
     let stripped = part
