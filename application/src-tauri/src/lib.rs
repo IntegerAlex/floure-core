@@ -1061,7 +1061,8 @@ async fn set_floure_config(update: crate::config::SettingsUpdate) -> Result<(), 
 fn export_ui_state(state: serde_json::Value) -> Result<(), AppError> {
     let dir = crate::config::config_dir();
     std::fs::create_dir_all(&dir)?;
-    let json = serde_json::to_string_pretty(&state)?;
+    let json = serde_json::to_string_pretty(&state)
+        .map_err(|e| AppError::Config(e.to_string()))?;
     std::fs::write(dir.join("ui-state.json"), json)?;
     Ok(())
 }
