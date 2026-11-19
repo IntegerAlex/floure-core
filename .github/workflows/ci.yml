@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+      - ".github/**"
   pull_request:
     branches: [master, main, UI_dev]
   workflow_dispatch:

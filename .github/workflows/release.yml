@@ -174,7 +174,7 @@ jobs:
               pacman -Syu --noconfirm
               pacman -S --needed --noconfirm \
                 alsa-lib clang cmake dbus fontconfig freetype2 gcc-libs git \
-                libx11 libxkbcommon openssl pkgconf rust vulkan-icd-loader wayland
+                libx11 libxkbcommon openssl pkgconf rust vulkan-icd-loader wayland zstd
               useradd --create-home builder
               chown -R builder:builder /build
               runuser -u builder -- env CARGO_BUILD_JOBS=2 CMAKE_BUILD_PARALLEL_LEVEL=2 makepkg --syncdeps --noconfirm
