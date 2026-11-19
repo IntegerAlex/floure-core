@@ -970,15 +970,16 @@ impl PipelineController {
                 _ => (None, None, None),
             };
 
-            let mut vad = match VoiceActivityDetector::new(&silero_path, crate::vad::SPEECH_THRESHOLD) {
-                Ok(v) => v,
-                Err(e) => {
-                    let _ =
-                        app_clone.emit("asr_error", serde_json::json!({"error": e.to_string()}));
-                    store_engines(key, parakeet, whisper, cached_llm);
-                    return;
-                }
-            };
+            let mut vad =
+                match VoiceActivityDetector::new(&silero_path, crate::vad::SPEECH_THRESHOLD) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = app_clone
+                            .emit("asr_error", serde_json::json!({"error": e.to_string()}));
+                        store_engines(key, parakeet, whisper, cached_llm);
+                        return;
+                    }
+                };
 
             // Owns LLM cleanup/typing/clipboard/history for this worker thread.
             // Created here (rather than moved from the controller) so inference
