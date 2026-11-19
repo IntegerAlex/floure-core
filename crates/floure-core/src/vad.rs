@@ -1,6 +1,14 @@
 use anyhow::Result;
 use sherpa_onnx::{VadModelConfig, VoiceActivityDetector as SherpaVad};
 
+/// Speech/silence probability gate.
+///
+/// 0.5 (Silero's default) ate soft word onsets whole — "so i am", "it should"
+/// never reached the recogniser because the lead-in stayed under the gate
+/// while the VAD made up its mind. 0.35 admits those starts; a false trigger
+/// costs nothing, it decodes to empty and the trim-guard drops it.
+pub const SPEECH_THRESHOLD: f32 = 0.35;
+
 /// Trailing silence the VAD needs before it closes a segment.
 ///
 /// Silero's own default is 0.1s and conversational endpointing guidance is

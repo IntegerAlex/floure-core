@@ -253,6 +253,7 @@ impl LlmProcessor {
         durations: &[f32],
         run_id: u64,
         app: &crate::sink::AppHandle,
+        mid_sentence: bool,
     ) {
         if CANCELLED.load(Ordering::SeqCst) || !run_is_current(run_id) {
             return;
@@ -358,8 +359,12 @@ impl LlmProcessor {
             return;
         }
 
+        // One payload for typing and clipboard alike: a mid-stream chunk keeps
+        // its separator space, so a manual paste order also reads correctly.
+        let payload = typed_payload(&cleaned, mid_sentence);
+
         if self.config.typing_enabled {
-            match type_text(&cleaned) {
+            match type_text(&payload) {
                 Ok(true) => {}
                 // Empty text is a legitimate no-op, not a failure.
                 Ok(false) if cleaned.trim().is_empty() => {}
@@ -396,7 +401,7 @@ impl LlmProcessor {
             }
         }
         if self.config.clipboard_enabled {
-            match copy_to_clipboard(&cleaned) {
+            match copy_to_clipboard(&payload) {
                 Ok(true) => {}
                 Ok(false) if cleaned.is_empty() => {}
                 Ok(false) => {
@@ -446,6 +451,17 @@ impl LlmProcessor {
                 );
             }
         }
+    }
+}
+
+/// What one chunk types: a mid-stream sentence gets a trailing space so the
+/// next sentence does not glue onto it ("testing it.Let's"); the final chunk
+/// stays bare. Clipboard and history keep the trimmed text.
+fn typed_payload(cleaned: &str, mid_sentence: bool) -> String {
+    if cleaned.is_empty() || !mid_sentence {
+        cleaned.to_string()
+    } else {
+        format!("{cleaned} ")
     }
 }
 
@@ -954,7 +970,7 @@ impl PipelineController {
                 _ => (None, None, None),
             };
 
-            let mut vad = match VoiceActivityDetector::new(&silero_path, 0.5) {
+            let mut vad = match VoiceActivityDetector::new(&silero_path, crate::vad::SPEECH_THRESHOLD) {
                 Ok(v) => v,
                 Err(e) => {
                     let _ =
@@ -1067,6 +1083,7 @@ impl PipelineController {
                                 &pending_durations,
                                 run_id,
                                 &app_clone,
+                                true,
                             );
                             pending_text.clear();
                             pending_timestamps.clear();
@@ -1122,6 +1139,7 @@ impl PipelineController {
                     &pending_durations,
                     run_id,
                     &app_clone,
+                    false,
                 );
             }
 
@@ -1204,6 +1222,21 @@ pub fn stop_pipeline() {
     }
     // Only safe to invalidate once the run it belonged to has finished.
     let _ = begin_run();
+}
+
+#[cfg(test)]
+mod typed_payload_tests {
+    use super::typed_payload;
+
+    /// A mid-stream sentence chunk types with a trailing space so the next
+    /// sentence does not glue onto it ("testing it.Let's"); the final chunk
+    /// stays bare so the transcript does not end in a stray space.
+    #[test]
+    fn mid_sentence_chunks_keep_a_trailing_space() {
+        assert_eq!(typed_payload("testing it.", true), "testing it. ");
+        assert_eq!(typed_payload("testing it.", false), "testing it.");
+        assert_eq!(typed_payload("", true), "", "empty stays empty either way");
+    }
 }
 
 #[cfg(test)]
@@ -1407,7 +1440,7 @@ mod cancel_tests {
         let app = sink.app_handle();
         let mut processor = LlmProcessor::from_cached(config, None);
         let run_id = begin_run();
-        processor.process("what can we do", &[], &[], run_id, &app);
+        processor.process("what can we do", &[], &[], run_id, &app, false);
 
         let mut final_text = None;
         while let Ok(event) = rx.try_recv() {
@@ -1450,7 +1483,7 @@ mod cancel_tests {
         let app = sink.app_handle();
         let mut processor = LlmProcessor::from_cached(AppConfig::default(), None);
         let run_id = begin_run();
-        processor.process("hello world", &[], &[], run_id, &app);
+        processor.process("hello world", &[], &[], run_id, &app, false);
 
         assert!(rx.try_recv().is_err(), "cancelled audio must stay silent");
         let rows = if dir.join("history.db").exists() {
