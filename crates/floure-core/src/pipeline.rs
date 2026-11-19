@@ -15,11 +15,13 @@ use crate::whisper::WhisperRecognizer;
 
 /// Silence fed at stop to force-close the trailing VAD segment, in ms.
 ///
-/// The VAD needs `min_silence_duration` (0.25s) to close, and WER stops
-/// improving past ~0.6s of trailing silence, so 0.7s deliberately overshoots
-/// the minimum: a segment still open when the worker exits is lost, while a
-/// slightly longer pad only costs latency.
-const FLUSH_SILENCE_MS: u32 = 700;
+/// Must clear the VAD's close threshold (`min_silence_duration`, 0.25s) and
+/// leave the transducer enough trailing frames to emit the final token:
+/// Parakeet TDT drops the last word of a clip that ends on the word — the
+/// bug macparakeet fixed with ~0.5s of trailing silence (moona3k/macparakeet
+/// #615). 0.55s sits just above that measured floor; below ~0.5s the last
+/// soft word is at risk, above it every release just pays latency.
+const FLUSH_SILENCE_MS: u32 = 550;
 
 /// Samples of silence to feed at stop, derived from the *capture* rate.
 ///
@@ -209,16 +211,32 @@ impl LlmProcessor {
         // `.ok()` used to swallow the load failure, so the only visible
         // symptom was the downstream "Local LLM model not loaded" — which
         // says nothing about *why* (missing file, blank model id, bad GGUF).
-        let llm = match LlmCleanup::new(backend, Some(&llm_model_path)) {
-            Ok(llm) => Some(llm),
-            Err(e) => {
-                eprintln!(
-                    "[llm] local model failed to load from {}: {e}",
-                    llm_model_path.display()
-                );
-                None
+        //
+        // The llama.cpp backend is process-global and its init flag resets
+        // only when the previous instance is dropped, so an idle-unload
+        // racing a press lands here with BackendAlreadyInitialized. The old
+        // instance's drop finishes in milliseconds — retry instead of losing
+        // the cleanup model for the whole press.
+        let mut llm: Option<LlmCleanup> = None;
+        for attempt in 0..5 {
+            match LlmCleanup::new(backend, Some(&llm_model_path)) {
+                Ok(loaded) => {
+                    llm = Some(loaded);
+                    break;
+                }
+                Err(e) if attempt < 4 && e.to_string().contains("BackendAlreadyInitialized") => {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[llm] local model failed to load from {}: {e}",
+                        llm_model_path.display()
+                    );
+                    break;
+                }
             }
-        };
+        }
+        let llm = llm;
         Self {
             llm,
             config,
@@ -284,6 +302,7 @@ impl LlmProcessor {
             .as_ref()
             .is_some_and(|l| normalized.len() <= crate::llm::max_transcript_bytes(l.backend))
         {
+            eprintln!("[pipeline] polish gate: running local cleanup");
             // Whole or not at all: the model's output *replaces* the entire
             // transcript, so feeding it a tail-clipped fragment silently drops
             // everything before the clip — speech the user never sees. Past the
@@ -475,16 +494,42 @@ fn transcribe_segment(
     run_id: u64,
     app: &crate::sink::AppHandle,
 ) -> Option<(String, Vec<f32>, Vec<f32>)> {
+    /// Trailing silence appended to every Parakeet segment before decode.
+    ///
+    /// The VAD hands segments over with as little as ~250ms of tail — and
+    /// ~0 when the user is still talking as the segment closes — which the
+    /// TDT transducer needs to emit its final tokens: a clip ending on the
+    /// last word decodes to "" (moona3k/macparakeet #615 fixed this with
+    /// ~0.5s of in-memory padding). 300ms brings the worst-case tail to
+    /// ~550ms, matching the measured floor. Whisper is NOT padded: trailing
+    /// silence makes it hallucinate text.
+    const PARAKEET_TAIL_PAD_MS: usize = 300;
+
     let start = Instant::now();
+    let peak = segment.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     eprintln!(
-        "[pipeline] transcribing segment ({} samples)",
-        segment.len()
+        "[pipeline] transcribing segment ({} samples, peak={:.3})",
+        segment.len(),
+        peak
     );
+    // In-memory pad at the segment's own rate; parakeet only.
+    let padded;
+    let decode_input: &[f32] = if parakeet.is_some() && PARAKEET_TAIL_PAD_MS > 0 {
+        let rate = 16_000usize; // segments are resampled to 16k before the VAD
+        padded = segment
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(0.0f32).take(rate * PARAKEET_TAIL_PAD_MS / 1000))
+            .collect::<Vec<f32>>();
+        &padded
+    } else {
+        segment
+    };
     let (text, timestamps, durations) = if let Some(rec) = parakeet {
         let decoded = if hotwords.is_empty() {
-            rec.transcribe_full(segment)
+            rec.transcribe_full(decode_input)
         } else {
-            rec.transcribe_full_with_hotwords(segment, hotwords)
+            rec.transcribe_full_with_hotwords(decode_input, hotwords)
         };
         match decoded {
             Some(r) => (
@@ -888,6 +933,12 @@ impl PipelineController {
         let running_clone = self.running.clone();
         let silero_path = self.silero_path.clone();
 
+        // The callback must stop feeding the channel the moment the run flag
+        // drops: stop_pipeline drains this channel, and against a live
+        // producer that drain is unbounded — the "stuck at stopping" hangs
+        // were the stop-flush racing a microphone that never went quiet.
+        let producer_gate = running_clone.clone();
+
         // A stream that dies mid-capture (unplugged mic, Bluetooth profile
         // switch) must not leave the worker typing from a frozen buffer. Stop
         // the run so it flushes what it has and exits, and tell the user.
@@ -908,7 +959,9 @@ impl PipelineController {
         let audio = match crate::audio::start_capture(
             mic_hint.as_deref(),
             move |samples: &[f32]| {
-                let _ = tx.send(samples.to_vec());
+                if producer_gate.load(Ordering::Relaxed) {
+                    let _ = tx.send(samples.to_vec());
+                }
             },
             on_stream_error,
         ) {
@@ -1202,6 +1255,20 @@ pub fn unload_cached_engines() {
     }
 }
 
+/// Join a worker with a deadline. Returns false when the deadline passed —
+/// the thread keeps running (leaked deliberately) and its output is
+/// invalidated by the caller, so a hung model can never wedge the widget.
+/// ponytail: leaking the thread is the accepted ceiling; the upgrade path is
+/// moving the local LLM into a subprocess that can be killed outright.
+fn join_with_timeout(handle: std::thread::JoinHandle<()>, timeout: Duration) -> bool {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = handle.join();
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(timeout).is_ok()
+}
+
 pub fn stop_pipeline() {
     // Order matters, and `TRANSITION` is what makes this order safe. The worker
     // checks its run id *before* the stop flag, so invalidating first sent it
@@ -1215,11 +1282,20 @@ pub fn stop_pipeline() {
         flag.store(false, Ordering::SeqCst);
     }
     // Join the worker so its stop-flush (transcribe tail → type) and engine
-    // hand-back finish before the next press spawns a new worker.
+    // hand-back finish before the next press spawns a new worker. Bounded: a
+    // hung model must not wedge the widget, so past the deadline the run is
+    // invalidated — the worker's late output fails the run check and types
+    // nothing.
     if let Some(handle) = WORKER.lock().unwrap().take() {
         eprintln!("[pipeline] stop: joining worker");
-        let _ = handle.join();
-        eprintln!("[pipeline] stop: worker joined");
+        let joined = join_with_timeout(handle, Duration::from_secs(5));
+        if joined {
+            eprintln!("[pipeline] stop: worker joined");
+        } else {
+            eprintln!(
+                "[pipeline] stop: worker did not finish in 5s — discarding its output, returning to idle"
+            );
+        }
     }
     // Only safe to invalidate once the run it belonged to has finished.
     let _ = begin_run();
@@ -1237,6 +1313,25 @@ mod typed_payload_tests {
         assert_eq!(typed_payload("testing it.", true), "testing it. ");
         assert_eq!(typed_payload("testing it.", false), "testing it.");
         assert_eq!(typed_payload("", true), "", "empty stays empty either way");
+    }
+}
+
+#[cfg(test)]
+mod stop_watchdog_tests {
+    use super::join_with_timeout;
+    use std::time::Duration;
+
+    #[test]
+    fn a_hanging_worker_times_out_and_a_healthy_one_reports_done() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let hanging = std::thread::spawn(move || {
+            let _ = rx.recv(); // blocks until the test drops tx
+        });
+        assert!(!join_with_timeout(hanging, Duration::from_millis(50)));
+
+        let done = std::thread::spawn(|| {});
+        assert!(join_with_timeout(done, Duration::from_secs(5)));
+        drop(tx);
     }
 }
 
@@ -1322,8 +1417,9 @@ mod flush_tests {
                 "{rate} Hz: flush is {secs}s, under the VAD's {MIN_SILENCE_SECS}s close threshold"
             );
             assert!(
-                secs >= 0.6,
-                "{rate} Hz: flush {secs}s is below the ~0.6s WER plateau"
+                secs >= 0.5,
+                "{rate} Hz: flush {secs}s is under the 0.5s trailing-silence floor \
+                 Parakeet TDT needs to emit the final token (moona3k/macparakeet #615)"
             );
         }
     }
