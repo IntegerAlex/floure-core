@@ -98,7 +98,7 @@ jobs:
             clang cmake pkg-config \
             libasound2-dev libdbus-1-dev libssl-dev \
             libfontconfig-dev libfreetype-dev \
-            libwayland-dev libxkbcommon-dev libx11-xcb-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev \
             libvulkan-dev \
             dpkg-dev rpm
           cargo install cargo-deb cargo-generate-rpm --locked
