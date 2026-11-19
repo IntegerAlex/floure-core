@@ -80,6 +80,19 @@ pub enum RunState {
     Stopped,
 }
 
+/// The widget's shown state: "listening" for the whole time the mic is open.
+/// Mid-hold the engine flips to Transcribing/Rewriting while a segment
+/// decodes; flashing that into the widget read as "it stopped" (user report:
+/// transcribing showing during a pause before release). After the mic is
+/// closed, the real status passes through.
+fn widget_state(recording: bool, status: RunState) -> RunState {
+    if recording {
+        RunState::Listening
+    } else {
+        status
+    }
+}
+
 impl RunState {
     pub fn label(self) -> &'static str {
         match self {
@@ -581,7 +594,9 @@ impl FloureApp {
     /// Keep the layer-shell widget in step with the engine. The widget owns
     /// its own window; this only feeds it the state it must not guess.
     fn sync_widget(&mut self, cx: &mut Context<Self>) {
-        self.widget.sync(self.status, self.mic_level, cx);
+        let shown = widget_state(self.recording, self.status);
+        let partial = self.partial_text.clone().unwrap_or_default();
+        self.widget.sync(shown, self.mic_level, partial, cx);
     }
 
     /// Tray "Show widget": visible while idle too, showing the real state.
@@ -1637,6 +1652,31 @@ fn load_recent_errors() -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod widget_state_tests {
+    use super::{RunState, widget_state};
+
+    /// While the mic is open the widget is "listening", full stop: mid-hold
+    /// the engine flips to Transcribing/Rewriting for a segment decode, and
+    /// flashing that read as "it stopped" (user report: transcribing during a
+    /// pause before release). After stop, the real state passes through.
+    #[test]
+    fn a_hold_never_downgrades_the_widget_out_of_listening() {
+        assert_eq!(
+            widget_state(true, RunState::Transcribing),
+            RunState::Listening
+        );
+        assert_eq!(widget_state(true, RunState::Rewriting), RunState::Listening);
+        assert_eq!(widget_state(true, RunState::Stopping), RunState::Listening);
+        assert_eq!(
+            widget_state(false, RunState::Transcribing),
+            RunState::Transcribing
+        );
+        assert_eq!(widget_state(false, RunState::Idle), RunState::Idle);
+        assert_eq!(widget_state(false, RunState::Error), RunState::Error);
+    }
 }
 
 #[cfg(test)]

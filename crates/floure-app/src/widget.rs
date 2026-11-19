@@ -21,7 +21,7 @@ use gpui::{
 use crate::app::RunState;
 use crate::theme;
 
-pub const WIDTH: f32 = 240.0;
+pub const WIDTH: f32 = 360.0;
 pub const HEIGHT: f32 = 56.0;
 /// Gap between the widget and the bottom screen edge, above a dock.
 const BOTTOM_INSET: f32 = 48.0;
@@ -72,11 +72,23 @@ pub fn bottom_centre(visible: Bounds<gpui::Pixels>) -> (f32, f32) {
     )
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct WidgetState {
     state: RunState,
     level: f32,
+    /// Live preview of the sentence being spoken; empty otherwise.
+    partial: String,
+    /// Last BARS *smoothed* mic levels, oldest first. Peak-hold with a fast
+    /// attack and slow decay is what makes the bars dance instead of
+    /// flickering — raw 15 Hz samples read as random spikes.
+    history: [f32; BARS],
+    smoothed: f32,
 }
+
+const BARS: usize = 7;
+/// Bar geometry: wide enough to read at a glance, matching the approved mock.
+const BAR_W: f32 = 4.0;
+const BAR_MAX: f32 = 24.0;
 
 pub struct FloureWidget {
     state: Arc<Mutex<WidgetState>>,
@@ -84,10 +96,10 @@ pub struct FloureWidget {
 
 impl FloureWidget {
     fn snapshot(&self) -> WidgetState {
-        *self
-            .state
+        self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 }
 
@@ -99,6 +111,13 @@ impl Render for FloureWidget {
             theme::accent()
         } else {
             theme::text_muted()
+        };
+        // While listening the partial transcript IS the label; the static
+        // state label returns for everything else.
+        let label = if recording && !snapshot.partial.is_empty() {
+            snapshot.partial.clone()
+        } else {
+            snapshot.state.label().to_string()
         };
         div()
             .size_full()
@@ -118,43 +137,45 @@ impl Render for FloureWidget {
                     .border_1()
                     .border_color(theme::border())
                     .bg(theme::surface())
-                    .child(div().size(px(6.0)).rounded_full().bg(dot))
+                    .overflow_hidden()
+                    .child(div().size(px(8.0)).flex_shrink_0().rounded_full().bg(dot))
+                    .child(waveform(&snapshot.history, recording))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .text_size(theme::TEXT_SM)
                             .text_color(theme::text())
-                            .child(snapshot.state.label()),
-                    )
-                    .child(waveform(snapshot.level, recording)),
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(label),
+                    ),
             )
     }
 }
 
-/// Eight bars driven by the live mic level. Idle states settle to a flat row
-/// so the widget never looks frozen.
-fn waveform(level: f32, recording: bool) -> impl IntoElement {
-    let pattern = [0.35, 0.7, 1.0, 0.55, 0.85, 0.45, 0.65, 0.3];
-    let gain = if recording {
-        0.55 + level.clamp(0.0, 1.0) * 4.0
-    } else {
-        0.5
-    };
+/// Bars ride the level history, newest on the right. Idle states settle to a
+/// flat baseline so the widget never looks frozen.
+fn waveform(history: &[f32; BARS], recording: bool) -> impl IntoElement {
     let color = if recording {
-        theme::text_secondary()
+        theme::text()
     } else {
         theme::text_muted()
     };
     let mut row = div()
         .flex()
         .flex_row()
-        .items_center()
-        .gap(px(2.0))
-        .h(px(20.0));
-    for step in pattern {
-        let height = (step * gain * 20.0).clamp(2.0, 20.0);
-        row = row.child(div().w(px(2.0)).h(px(height)).rounded(px(1.0)).bg(color));
+        .items_end()
+        .gap(px(3.0))
+        .h(px(BAR_MAX))
+        .flex_shrink_0();
+    for &value in history {
+        let height = if recording {
+            (value.clamp(0.0, 1.0) * BAR_MAX).max(3.0)
+        } else {
+            3.0
+        };
+        row = row.child(div().w(px(BAR_W)).h(px(height)).rounded(px(1.0)).bg(color));
     }
     row
 }
@@ -177,6 +198,9 @@ impl WidgetHost {
             state: Arc::new(Mutex::new(WidgetState {
                 state: RunState::Idle,
                 level: 0.0,
+                partial: String::new(),
+                history: [0.0; BARS],
+                smoothed: 0.0,
             })),
             manual: false,
         }
@@ -196,14 +220,27 @@ impl WidgetHost {
     /// current state.
     pub fn show_manual(&mut self, state: RunState, level: f32, cx: &mut App) {
         self.manual = true;
-        self.sync(state, level, cx);
+        self.sync(state, level, String::new(), cx);
     }
 
     /// Mirror the engine state into the widget, opening and closing the window
     /// as the state dictates.
-    pub fn sync(&mut self, state: RunState, level: f32, cx: &mut App) {
+    pub fn sync(&mut self, state: RunState, level: f32, partial: String, cx: &mut App) {
         if let Ok(mut current) = self.state.lock() {
-            *current = WidgetState { state, level };
+            // Peak-hold envelope: instant attack, ~0.5s decay. Raw samples
+            // make the bars flicker; this is what "reacts to audio" means.
+            let smoothed = if state == RunState::Listening {
+                (level.max(current.smoothed * 0.85)).clamp(0.0, 1.0)
+            } else {
+                level.clamp(0.0, 1.0)
+            };
+            current.smoothed = smoothed;
+            // Oldest drops off the left, the fresh level lands on the right.
+            current.history.rotate_left(1);
+            current.history[BARS - 1] = smoothed;
+            current.level = level;
+            current.state = state;
+            current.partial = partial;
         }
         let wanted = state.shows_widget() || self.manual;
         if wanted {
@@ -350,6 +387,9 @@ mod tests {
             state: Arc::new(Mutex::new(WidgetState {
                 state: RunState::Idle,
                 level: 0.0,
+                partial: String::new(),
+                history: [0.0; BARS],
+                smoothed: 0.0,
             })),
             manual: false,
         };
