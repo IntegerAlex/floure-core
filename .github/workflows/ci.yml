@@ -72,12 +72,14 @@ jobs:
           set -euo pipefail
           deb=$(find target/debian -name '*.deb' | head -1)
           test -n "$deb"
-          dpkg-deb -c "$deb" | grep -q '.usr/bin/floure$'
-          dpkg-deb -c "$deb" | grep -q '.usr/share/applications/floure.desktop$'
-          dpkg-deb -c "$deb" | grep -q '.usr/share/icons/hicolor/512x512/apps/floure.png$'
+          # plain grep + >/dev/null, never -q: grep -q exits on the first
+          # match and tar's SIGPIPE becomes exit 2 under pipefail.
+          dpkg-deb -c "$deb" | grep '.usr/bin/floure$' >/dev/null
+          dpkg-deb -c "$deb" | grep '.usr/share/applications/floure.desktop$' >/dev/null
+          dpkg-deb -c "$deb" | grep '.usr/share/icons/hicolor/512x512/apps/floure.png$' >/dev/null
           rpm=$(find target/generate-rpm -name '*.rpm' | head -1)
           test -n "$rpm"
-          rpm -qlp "$rpm" | grep -q '^/usr/bin/floure$'
+          rpm -qlp "$rpm" | grep '^/usr/bin/floure$' >/dev/null
           if ldd target/release/floure | grep -q 'not found'; then
             echo '::error::unresolved shared library'
             ldd target/release/floure
