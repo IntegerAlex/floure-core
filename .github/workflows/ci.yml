@@ -1,103 +1,94 @@
 name: CI
 
 on:
-  # master had no CI at all: the pull_request filter below only matches PRs
-  # into main/UI_dev, while all work lands on master. That is how both
-  # formatters drifted red without anyone noticing.
   push:
     branches: [master]
   pull_request:
-    branches: [main, UI_dev]
+    branches: [master, main, UI_dev]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  frontend-lint:
-    name: Frontend Lint
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: application
+  rust:
+    name: Rust
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
-          version: 11
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: application/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run lint
-      - run: pnpm run format:check
-
-  frontend-test:
-    name: Frontend Tests
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: application
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: application/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run test
-
-  frontend-typecheck:
-    name: Frontend Typecheck
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: application
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: application/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run build
-
-  rust-check:
-    name: Rust Check
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: application/src-tauri
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: application/src-tauri
-      - name: Install Tauri build deps (Linux)
+          workspaces: "."
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          # No Vulkan SDK: the llama.cpp Vulkan backend is opt-in, so the
-          # default build needs no glslc / SPIRV-Headers.
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libasound2-dev \
-            libdbus-1-dev
+            clang cmake pkg-config \
+            libasound2-dev libdbus-1-dev libssl-dev \
+            libfontconfig-dev libfreetype-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libvulkan-dev
       - run: cargo fmt --check
-      - run: cargo clippy -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo test --workspace
+
+  package:
+    name: Package
+    needs: rust
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+      - name: Install packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake pkg-config \
+            libasound2-dev libdbus-1-dev libssl-dev \
+            libfontconfig-dev libfreetype-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libvulkan-dev \
+            dpkg-dev rpm
+          cargo install cargo-deb cargo-generate-rpm --locked
+      - name: Build release binary
+        run: cargo build --release -p floure-app
+      - name: Build deb
+        run: cargo deb --no-build -p floure-app
+      - name: Build rpm
+        run: cargo generate-rpm -p crates/floure-app
+      - name: Assert package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb=$(find target/debian -name '*.deb' | head -1)
+          test -n "$deb"
+          # plain grep + >/dev/null, never -q: grep -q exits on the first
+          # match and tar's SIGPIPE becomes exit 2 under pipefail.
+          dpkg-deb -c "$deb" | grep '.usr/bin/floure$' >/dev/null
+          dpkg-deb -c "$deb" | grep '.usr/share/applications/floure.desktop$' >/dev/null
+          dpkg-deb -c "$deb" | grep '.usr/share/icons/hicolor/512x512/apps/floure.png$' >/dev/null
+          rpm=$(find target/generate-rpm -name '*.rpm' | head -1)
+          test -n "$rpm"
+          rpm -qlp "$rpm" | grep '^/usr/bin/floure$' >/dev/null
+          if ldd target/release/floure | grep -q 'not found'; then
+            echo '::error::unresolved shared library'
+            ldd target/release/floure
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: floure-linux-packages
+          path: |
+            target/debian/*.deb
+            target/generate-rpm/*.rpm
+          if-no-files-found: error

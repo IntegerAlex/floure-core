@@ -59,6 +59,22 @@ function App() {
     initTheme();
   }, []);
 
+  // One-shot bridge for the native GPUI app: these preferences only live in
+  // localStorage, which goes away with the webview. `floure-core::migrate`
+  // reads `ui-state.json` once and retires it.
+  useEffect(() => {
+    const state = {
+      hotkey,
+      ptt_mode: pttMode,
+      sound_enabled: soundOn,
+      sound_volume: soundVolume,
+      onboarding_completed: localStorage.getItem("onboarding_completed") === "true",
+    };
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke("export_ui_state", { state }))
+      .catch(() => {});
+  }, [hotkey, pttMode, soundOn, soundVolume, view]);
+
   const addError = useCallback(
     (category: AppError["category"], message: string, canRetry = false, retryHint?: string) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;

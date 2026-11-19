@@ -33,6 +33,9 @@ package-lock.json
 # Rust
 **/target/
 
+# Agent/skill scratch
+.superpowers/
+
 # Tauri
 application/src-tauri/gen/
 application/dist/
@@ -45,3 +48,9 @@ application/dist/
 # Benchmark audio (regenerable via benchmark-audio/fetch.py, CC BY 4.0)
 benchmark-audio/wavs/
 benchmark-audio/baseline*.json
+
+# Local worktrees
+.worktrees/
+
+# Agent tooling
+.claude/

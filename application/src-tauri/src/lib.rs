@@ -1051,6 +1051,22 @@ async fn set_floure_config(update: crate::config::SettingsUpdate) -> Result<(), 
     config.save().map_err(|e| AppError::Config(e.to_string()))
 }
 
+/// One-shot migration bridge for the native GPUI app.
+///
+/// Hotkey, PTT mode, sound preferences, and the onboarding flag only ever
+/// lived in WebKit localStorage, which disappears with the webview. Writing
+/// them next to `config.json` lets `floure-core::migrate` read them once and
+/// retire the file.
+#[tauri::command]
+fn export_ui_state(state: serde_json::Value) -> Result<(), AppError> {
+    let dir = crate::config::config_dir();
+    std::fs::create_dir_all(&dir)?;
+    let json = serde_json::to_string_pretty(&state)
+        .map_err(|e| AppError::Config(e.to_string()))?;
+    std::fs::write(dir.join("ui-state.json"), json)?;
+    Ok(())
+}
+
 #[tauri::command]
 fn set_openrouter_api_key(key: String) {
     crate::llm::set_openrouter_api_key(key);
@@ -1221,6 +1237,7 @@ pub fn run() {
             import_dictionary_csv,
             export_dictionary_csv,
             set_floure_config,
+            export_ui_state,
             set_openrouter_api_key,
             start_listening,
             stop_listening,

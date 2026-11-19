@@ -1,0 +1,4 @@
+# Keep builds within the machine's memory budget. llama.cpp/sherpa C++ builds
+# are the peak; two jobs avoids the 13 GB spikes seen with the default.
+[build]
+jobs = 2

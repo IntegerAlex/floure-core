@@ -1,0 +1,1605 @@
+use anyhow::Result;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+use crate::config::{AppConfig, history_db_path, resolved_llm_model};
+use crate::llm::{LlmBackend, LlmCleanup, LlmMode};
+use crate::models::{MODEL_MANIFEST, download_model, find_model, verify_model};
+use crate::output::{copy_to_clipboard, save_to_history, type_text};
+use crate::parakeet::ParakeetRecognizer;
+use crate::vad::VoiceActivityDetector;
+use crate::whisper::WhisperRecognizer;
+
+/// Silence fed at stop to force-close the trailing VAD segment, in ms.
+///
+/// Must clear the VAD's close threshold (`min_silence_duration`, 0.25s) and
+/// leave the transducer enough trailing frames to emit the final token:
+/// Parakeet TDT drops the last word of a clip that ends on the word — the
+/// bug macparakeet fixed with ~0.5s of trailing silence (moona3k/macparakeet
+/// #615). 0.55s sits just above that measured floor; below ~0.5s the last
+/// soft word is at risk, above it every release just pays latency.
+const FLUSH_SILENCE_MS: u32 = 550;
+
+/// Samples of silence to feed at stop, derived from the *capture* rate.
+///
+/// Never a fixed count: the old literal of 8000 was 500ms at 16 kHz but only
+/// ~167ms at 48 kHz — under the VAD's close threshold, so the last words were
+/// silently dropped on high-rate microphones.
+fn flush_silence_samples(sample_rate: u32) -> usize {
+    (sample_rate as usize * FLUSH_SILENCE_MS as usize) / 1000
+}
+
+static PIPELINE_RUNNING: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+
+/// Set by `cancel_pipeline`. The worker exits without the stop-flush, and the
+/// output stage checks it before typing, copying, or saving, so cancelled audio
+/// never reaches the focused window or the history file.
+static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+static PIPELINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Monotonic run id, bumped on every stop and every start.
+///
+/// The worker also polls `PIPELINE_RUNNING`, but that flag alone cannot decide
+/// its fate: `stop_pipeline` clears it and a following `start_pipeline` sets it
+/// straight back to true, so a worker that was still inside `process()` woke up
+/// and kept running alongside its successor — two capture streams, both typing,
+/// which interleaved duplicated text into the focused window. A run may only
+/// continue while its own id is still the newest one, and ids are never reused.
+static PIPELINE_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Open a new run, invalidating every earlier one.
+fn begin_run() -> u64 {
+    PIPELINE_GEN.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Whether the run started with `run_id` is still the current one.
+fn run_is_current(run_id: u64) -> bool {
+    PIPELINE_GEN.load(Ordering::SeqCst) == run_id
+}
+
+/// The worker thread handle. `stop_pipeline` joins it so the flush (and the
+/// engine hand-back below) always completes before the next press starts.
+/// Without the join, a rapid re-press overlaps the previous worker: two live
+/// `LlamaBackend`s, and the second `init` fails with
+/// `BackendAlreadyInitialized` (the flag only resets on drop).
+static WORKER: std::sync::Mutex<Option<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(None);
+
+/// Serialises the start and stop transitions against each other.
+///
+/// `stop_pipeline` has to clear the flag, let the worker run its stop-flush,
+/// join it, and only then invalidate the run — but a new press landing inside
+/// that window sets the flag back to true, which is precisely the revival
+/// `PIPELINE_GEN` exists to prevent. Holding this lock across both transitions
+/// makes each one atomic with respect to the other.
+static TRANSITION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Engines kept warm across PTT presses. Reloading ~1GB of models per press
+/// made tap-to-talk unusable (stop killed the worker before ASR finished),
+/// so the worker takes these on start and returns them on exit.
+struct CachedEngines {
+    key: String,
+    parakeet: Option<ParakeetRecognizer>,
+    whisper: Option<WhisperRecognizer>,
+    llm: Option<LlmCleanup>,
+}
+
+static ENGINE_CACHE: std::sync::Mutex<Option<CachedEngines>> = std::sync::Mutex::new(None);
+
+/// llama.cpp's backend init is process-wide and its flag only clears on drop,
+/// so two overlapping builds make the loser fail with
+/// `BackendAlreadyInitialized`. `warm_engines` and a press can both start a
+/// build at once (the warm thread checks the running flag *before* its long
+/// build, not after); this makes them take turns.
+static LLM_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// True while the start-up warm thread is (or may still be) building.
+/// Set first thing in `warm_engines` so a UI query racing thread start
+/// still sees "warming"; cleared on every exit path via the guard.
+static WARMING: AtomicBool = AtomicBool::new(false);
+
+struct WarmGuard;
+
+impl Drop for WarmGuard {
+    fn drop(&mut self) {
+        WARMING.store(false, Ordering::SeqCst);
+    }
+}
+
+pub fn is_warming() -> bool {
+    WARMING.load(Ordering::SeqCst)
+}
+
+/// True when the cache already holds engines for the on-disk config.
+pub fn is_ready() -> bool {
+    let config = crate::config::with_dictionary_hotwords(AppConfig::load());
+    let key = engine_key(&config);
+    ENGINE_CACHE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|c| c.key == key)
+}
+
+fn engine_key(config: &AppConfig) -> String {
+    format!(
+        "{:?}|{}|{}|{}|{:?}|{}",
+        config.asr_profile,
+        config.asr_profile.model_id(),
+        config.language,
+        config.hotwords,
+        config.llm_provider,
+        resolved_llm_model(&config.llm_model),
+    )
+}
+
+/// Cache engines for the next press. Never stores an empty set: a failed
+/// build must rebuild next press, not latch the failure.
+fn store_engines(
+    key: String,
+    parakeet: Option<ParakeetRecognizer>,
+    whisper: Option<WhisperRecognizer>,
+    llm: Option<LlmCleanup>,
+) {
+    if parakeet.is_none() && whisper.is_none() {
+        return;
+    }
+    *ENGINE_CACHE.lock().unwrap() = Some(CachedEngines {
+        key,
+        parakeet,
+        whisper,
+        llm,
+    });
+}
+
+pub fn get_running_flag() -> &'static Arc<AtomicBool> {
+    PIPELINE_RUNNING.get_or_init(|| Arc::new(AtomicBool::new(false)))
+}
+
+fn load_replacements() -> Vec<(String, String)> {
+    let path = history_db_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    crate::Dictionary::new(path)
+        .replacements()
+        .unwrap_or_default()
+}
+
+pub struct LlmProcessor {
+    llm: Option<LlmCleanup>,
+    config: AppConfig,
+    /// Dictionary phrase -> spelling, enforced after recognition.
+    replacements: Vec<(String, String)>,
+}
+
+impl LlmProcessor {
+    pub fn new(config: AppConfig) -> Self {
+        let replacements = load_replacements();
+        if config.llm_mode == LlmMode::Off {
+            return Self {
+                llm: None,
+                config,
+                replacements,
+            };
+        }
+        // Build the model path from the selected LLM model ID in config.
+        // The manifest's `filename` field is the on-disk name; fall back to
+        // the legacy gemma path if the model isn't in the manifest yet.
+        // Resolve blank ids first: `models/""/file.gguf` collapses to
+        // `models/file.gguf` and never matches the downloaded layout, which is
+        // why a downloaded model could report "Local LLM model not loaded".
+        let llm_model_id = resolved_llm_model(&config.llm_model);
+        let filename = crate::models::find_model(&llm_model_id)
+            .and_then(|m| m.filename)
+            .unwrap_or("s1-mini-q4_k_m.gguf");
+        let llm_model_path = config.model_dir.join(&llm_model_id).join(filename);
+        // Legacy fallback: check the old flat path before the subdirectory layout
+        let llm_model_path = if llm_model_path.exists() {
+            llm_model_path
+        } else {
+            config.model_dir.join(filename)
+        };
+        let backend = match config.llm_provider {
+            crate::config::LlmProvider::OpenRouter => LlmBackend::OpenRouter,
+            crate::config::LlmProvider::Local => LlmBackend::Local,
+        };
+        // `.ok()` used to swallow the load failure, so the only visible
+        // symptom was the downstream "Local LLM model not loaded" — which
+        // says nothing about *why* (missing file, blank model id, bad GGUF).
+        //
+        // The llama.cpp backend is process-global and its init flag resets
+        // only when the previous instance is dropped, so an idle-unload
+        // racing a press lands here with BackendAlreadyInitialized. The old
+        // instance's drop finishes in milliseconds — retry instead of losing
+        // the cleanup model for the whole press.
+        let mut llm: Option<LlmCleanup> = None;
+        for attempt in 0..5 {
+            match LlmCleanup::new(backend, Some(&llm_model_path)) {
+                Ok(loaded) => {
+                    llm = Some(loaded);
+                    break;
+                }
+                Err(e) if attempt < 4 && e.to_string().contains("BackendAlreadyInitialized") => {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[llm] local model failed to load from {}: {e}",
+                        llm_model_path.display()
+                    );
+                    break;
+                }
+            }
+        }
+        let llm = llm;
+        Self {
+            llm,
+            config,
+            replacements,
+        }
+    }
+
+    pub fn from_cached(config: AppConfig, llm: Option<LlmCleanup>) -> Self {
+        let replacements = load_replacements();
+        if config.llm_mode == LlmMode::Off {
+            return Self {
+                llm: None,
+                config,
+                replacements,
+            };
+        }
+        Self {
+            llm,
+            config,
+            replacements,
+        }
+    }
+
+    pub fn into_llm(self) -> Option<LlmCleanup> {
+        self.llm
+    }
+
+    pub fn process(
+        &mut self,
+        text: &str,
+        timestamps: &[f32],
+        durations: &[f32],
+        run_id: u64,
+        app: &crate::sink::AppHandle,
+        mid_sentence: bool,
+    ) {
+        if CANCELLED.load(Ordering::SeqCst) || !run_is_current(run_id) {
+            return;
+        }
+        let mode = self.config.llm_mode;
+        let spoken = if self.config.spoken_punctuation {
+            crate::text::apply_spoken_punctuation(text)
+        } else {
+            text.to_string()
+        };
+        // Deterministic repair first. It is cheap, local, and fixes the
+        // mechanical artifacts (premature periods, missing question marks,
+        // spacing, casing) before any optional model sees the text.
+        let normalized = crate::text::normalize(&spoken);
+        let cleaned: String;
+
+        if mode == LlmMode::Off {
+            cleaned = normalized;
+        } else if mode == LlmMode::Cleanup
+            && !crate::llm::needs_cleanup(&normalized, timestamps, durations)
+        {
+            // Skip the LLM on transcripts that look clean: the pass costs
+            // seconds and unconstrained rewriting regresses good output.
+            eprintln!("[pipeline] polish gate: skipped (looks clean)");
+            cleaned = normalized;
+        } else if self
+            .llm
+            .as_ref()
+            .is_some_and(|l| normalized.len() <= crate::llm::max_transcript_bytes(l.backend))
+        {
+            eprintln!("[pipeline] polish gate: running local cleanup");
+            // Whole or not at all: the model's output *replaces* the entire
+            // transcript, so feeding it a tail-clipped fragment silently drops
+            // everything before the clip — speech the user never sees. Past the
+            // budget, the trailing branch passes the text through untouched.
+            let llm = self.llm.as_mut().expect("checked in the condition above");
+            let prompt = crate::llm::build_prompt(&normalized, mode);
+            let _ = app.emit("llm_start", serde_json::json!({}));
+
+            let collected = Arc::new(std::sync::Mutex::new(String::new()));
+            let collected_clone = collected.clone();
+            let app_for_callback = app.clone();
+
+            let result = llm.stream_cleanup(&prompt, move |token| {
+                let _ = app_for_callback.emit("llm_token", serde_json::json!({ "token": token }));
+                collected_clone.lock().unwrap().push_str(&token);
+            });
+
+            let _ = app.emit("llm_end", serde_json::json!({}));
+            if result.is_ok() {
+                let candidate = crate::llm::clean_response(&collected.lock().unwrap());
+                match crate::llm::validate_polish(&normalized, &candidate) {
+                    Some(text) => cleaned = text,
+                    None => {
+                        eprintln!("[pipeline] polish rejected (empty or summarised)");
+                        let _ = app.emit(
+                            "llm_error",
+                            serde_json::json!({
+                                "error": "Polish returned an empty or shortened result; kept the deterministic transcript."
+                            }),
+                        );
+                        cleaned = normalized;
+                    }
+                }
+            } else {
+                // Fall back to the deterministic transcript, but surface the
+                // failure instead of silently degrading.
+                if let Err(e) = result {
+                    eprintln!("[pipeline] polish failed: {}", e);
+                    let _ = app.emit("llm_error", serde_json::json!({"error": e.to_string()}));
+                }
+                cleaned = normalized;
+            }
+        } else if self.llm.is_none() && mode != LlmMode::Off {
+            eprintln!("[pipeline] polish selected but no local cleanup model is loaded");
+            cleaned = normalized;
+        } else {
+            // No LLM configured, or the transcript is over that backend's
+            // budget — pass it through whole rather than clean a fragment of it.
+            cleaned = normalized;
+        }
+
+        // Fillers come out deterministically, whatever produced `cleaned` —
+        // including the skip and Off paths — so filler removal no longer
+        // depends on the model, which is prone to eating real words next to them.
+        let cleaned = crate::llm::strip_fillers(&cleaned);
+        let cleaned = crate::text::apply_replacements(&cleaned, &self.replacements);
+        // ponytail: the decoder bleeds space runs onto utterance ends; trim
+        // them. Internal newlines (bullet/email modes) are preserved.
+        let cleaned = cleaned.trim().to_string();
+        // Run the deterministic repair again on prose: filler removal can
+        // expose a double space or leave a sentence open. Generative modes
+        // keep their deliberate structure.
+        let cleaned = if matches!(mode, LlmMode::Off | LlmMode::Cleanup) {
+            crate::text::normalize(&cleaned)
+        } else {
+            cleaned
+        };
+        let _ = app.emit("cleanup_done", serde_json::json!({ "text": cleaned }));
+
+        // A cancel or a newer run during a long cleanup pass must not type
+        // or save the result.
+        if CANCELLED.load(Ordering::SeqCst) || !run_is_current(run_id) {
+            return;
+        }
+
+        // One payload for typing and clipboard alike: a mid-stream chunk keeps
+        // its separator space, so a manual paste order also reads correctly.
+        let payload = typed_payload(&cleaned, mid_sentence);
+
+        if self.config.typing_enabled {
+            match type_text(&payload) {
+                Ok(true) => {}
+                // Empty text is a legitimate no-op, not a failure.
+                Ok(false) if cleaned.trim().is_empty() => {}
+                // The tool ran but reported failure — e.g. xdotool present
+                // with no DISPLAY. Previously indistinguishable from success.
+                Ok(false) => {
+                    eprintln!("[pipeline] type_text ran but reported failure");
+                    // ponytail: platform hint only; the tool name differs per
+                    // OS and a wrong hint here already cost a debug round.
+                    let hint = match std::env::consts::OS {
+                        "linux" => "wtype, dotool or ydotool (Wayland), or xdotool (X11)",
+                        "windows" => "clipboard (clip.exe) + Ctrl+V paste",
+                        _ => "the system typing helper",
+                    };
+                    let _ = app.emit(
+                        "output_error",
+                        serde_json::json!({
+                            "error": format!(
+                                "Typing the transcript failed. Check that {hint} works in this session."
+                            )
+                        }),
+                    );
+                }
+                // Spawn failure: the tool is not installed at all.
+                Err(e) => {
+                    eprintln!("[pipeline] type_text failed: {}", e);
+                    let _ = app.emit(
+                        "output_error",
+                        serde_json::json!({
+                            "error": format!("Could not type the transcript: {e}.")
+                        }),
+                    );
+                }
+            }
+        }
+        if self.config.clipboard_enabled {
+            match copy_to_clipboard(&payload) {
+                Ok(true) => {}
+                Ok(false) if cleaned.is_empty() => {}
+                Ok(false) => {
+                    eprintln!("[pipeline] copy_to_clipboard ran but reported failure");
+                    let _ = app.emit(
+                        "output_error",
+                        serde_json::json!({
+                            "error": "Copying to the clipboard failed. Check that wl-clipboard (Wayland) or xclip (X11) works in this session."
+                        }),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[pipeline] copy_to_clipboard failed: {}", e);
+                    let _ = app.emit(
+                        "output_error",
+                        serde_json::json!({
+                            "error": format!(
+                                "Could not copy to the clipboard: {e}. Install wl-clipboard (Wayland) or xclip (X11)."
+                            )
+                        }),
+                    );
+                }
+            }
+        }
+
+        let db_path = history_db_path();
+        let duration_sec = durations.iter().sum::<f32>() as f64;
+        match save_to_history(
+            &cleaned,
+            text,
+            mode.as_str(),
+            "floure",
+            &self.config.language,
+            duration_sec,
+            &db_path,
+        ) {
+            Ok(history_id) => {
+                let _ = app.emit("committed", serde_json::json!({ "history_id": history_id }));
+            }
+            Err(e) => {
+                eprintln!("[pipeline] history save failed: {e}");
+                let _ = app.emit(
+                    "output_error",
+                    serde_json::json!({
+                        "error": format!("The transcript could not be saved to history: {e}")
+                    }),
+                );
+            }
+        }
+    }
+}
+
+/// What one chunk types: a mid-stream sentence gets a trailing space so the
+/// next sentence does not glue onto it ("testing it.Let's"); the final chunk
+/// stays bare. Clipboard and history keep the trimmed text.
+fn typed_payload(cleaned: &str, mid_sentence: bool) -> String {
+    if cleaned.is_empty() || !mid_sentence {
+        cleaned.to_string()
+    } else {
+        format!("{cleaned} ")
+    }
+}
+
+/// Decode one VAD segment and run it through LLM cleanup → typing /
+/// clipboard / history. Shared by the live loop and the stop-flush.
+fn transcribe_segment(
+    segment: &[f32],
+    parakeet: &Option<ParakeetRecognizer>,
+    whisper: &Option<WhisperRecognizer>,
+    hotwords: &str,
+    run_id: u64,
+    app: &crate::sink::AppHandle,
+) -> Option<(String, Vec<f32>, Vec<f32>)> {
+    /// Trailing silence appended to every Parakeet segment before decode.
+    ///
+    /// The VAD hands segments over with as little as ~250ms of tail — and
+    /// ~0 when the user is still talking as the segment closes — which the
+    /// TDT transducer needs to emit its final tokens: a clip ending on the
+    /// last word decodes to "" (moona3k/macparakeet #615 fixed this with
+    /// ~0.5s of in-memory padding). 300ms brings the worst-case tail to
+    /// ~550ms, matching the measured floor. Whisper is NOT padded: trailing
+    /// silence makes it hallucinate text.
+    const PARAKEET_TAIL_PAD_MS: usize = 300;
+
+    let start = Instant::now();
+    let peak = segment.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    eprintln!(
+        "[pipeline] transcribing segment ({} samples, peak={:.3})",
+        segment.len(),
+        peak
+    );
+    // In-memory pad at the segment's own rate; parakeet only.
+    let padded;
+    let decode_input: &[f32] = if parakeet.is_some() && PARAKEET_TAIL_PAD_MS > 0 {
+        let rate = 16_000usize; // segments are resampled to 16k before the VAD
+        padded = segment
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(
+                0.0f32,
+                rate * PARAKEET_TAIL_PAD_MS / 1000,
+            ))
+            .collect::<Vec<f32>>();
+        &padded
+    } else {
+        segment
+    };
+    let (text, timestamps, durations) = if let Some(rec) = parakeet {
+        let decoded = if hotwords.is_empty() {
+            rec.transcribe_full(decode_input)
+        } else {
+            rec.transcribe_full_with_hotwords(decode_input, hotwords)
+        };
+        match decoded {
+            Some(r) => (
+                r.text.clone(),
+                r.timestamps.clone().unwrap_or_default(),
+                r.durations.clone().unwrap_or_default(),
+            ),
+            None => (String::new(), Vec::new(), Vec::new()),
+        }
+    } else if let Some(ws) = whisper {
+        (ws.transcribe(segment), Vec::new(), Vec::new())
+    } else {
+        (String::new(), Vec::new(), Vec::new())
+    };
+    let latency_ms = start.elapsed().as_millis() as u64;
+    eprintln!("[pipeline] transcribed in {latency_ms}ms: {text:?}");
+
+    // ponytail: trim-guard, not is_empty — VAD noise segments decode to
+    // whitespace (" "), which must never emit, type, or save as rows.
+    if text.trim().is_empty() {
+        return None;
+    }
+    // Cancelled or superseded while the decoder was busy: drop the result.
+    if CANCELLED.load(Ordering::SeqCst) || !run_is_current(run_id) {
+        return None;
+    }
+    let _ = app.emit(
+        "asr_final",
+        serde_json::json!({
+            "text": text,
+            "latency_ms": latency_ms,
+            "duration_sec": segment.len() as f64 / 16000.0,
+        }),
+    );
+    Some((text, timestamps, durations))
+}
+
+/// Decode the live buffer for display only. Same recognizers, no cleanup,
+/// no history, no output.
+fn decode_preview(
+    parakeet: &Option<ParakeetRecognizer>,
+    whisper: &Option<WhisperRecognizer>,
+    hotwords: &str,
+    samples: &[f32],
+) -> Option<String> {
+    if samples.len() < 8_000 {
+        return None;
+    }
+    let n = samples.len().max(1);
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt();
+    if rms < 0.006 {
+        return None;
+    }
+    let text = if let Some(rec) = parakeet {
+        let decoded = if hotwords.is_empty() {
+            rec.transcribe_full(samples)
+        } else {
+            rec.transcribe_full_with_hotwords(samples, hotwords)
+        };
+        decoded.map(|result| result.text).unwrap_or_default()
+    } else if let Some(ws) = whisper {
+        ws.transcribe(samples)
+    } else {
+        String::new()
+    };
+    (!text.trim().is_empty()).then_some(text)
+}
+
+/// Whether a new VAD segment starts a new sentence. Segments are not
+/// sentences: a pause inside "the testing | of the application" must join,
+/// while "Mm-hmm. | So here..." is two.
+fn starts_new_sentence(previous: &str, next: &str) -> bool {
+    let previous = previous.trim_end();
+    if previous.is_empty() || !matches!(previous.chars().last(), Some('.' | '?' | '!')) {
+        return false;
+    }
+    let first = next.split_whitespace().next().unwrap_or("");
+    if first
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_uppercase() || c.is_ascii_digit())
+    {
+        return true;
+    }
+    !crate::text::continues_sentence(previous, next)
+}
+
+/// Build ASR recognizers for this config. Returns the pair plus whether the
+/// language check passed (false = wrong-language whisper, caller must abort).
+/// Emits `asr_ready` / `asr_error`, so start-up warm-up announces readiness
+/// through the same channel as a first press.
+fn build_recognizers(
+    config: &AppConfig,
+    app: &crate::sink::AppHandle,
+) -> (Option<ParakeetRecognizer>, Option<WhisperRecognizer>, bool) {
+    let model_id = config.asr_profile.model_id();
+    let model_dir = config.asr_profile.model_dir(&config.model_dir);
+    let mut parakeet: Option<ParakeetRecognizer> = None;
+    let mut whisper: Option<WhisperRecognizer> = None;
+
+    if verify_model(&config.model_dir, find_model(model_id).unwrap()) {
+        match config.asr_profile {
+            crate::config::AsrProfile::Parakeet | crate::config::AsrProfile::ParakeetUltra => {
+                // No vocabulary means no biasing: greedy search is
+                // faster and the bench baseline shows it is not less
+                // accurate without hotwords.
+                let built = if config.hotwords.is_empty() {
+                    ParakeetRecognizer::new(
+                        &model_dir,
+                        crate::compute::inference_threads() as i32,
+                        false,
+                    )
+                } else {
+                    ParakeetRecognizer::new_biased(
+                        &model_dir,
+                        crate::compute::inference_threads() as i32,
+                        false,
+                    )
+                };
+                match built {
+                    Ok(r) => {
+                        parakeet = Some(r);
+                        let _ = app.emit("asr_ready", serde_json::json!({ "backend": "parakeet" }));
+                    }
+                    Err(e) => {
+                        let _ = app.emit("asr_error", serde_json::json!({"error": e.to_string()}));
+                    }
+                }
+            }
+            crate::config::AsrProfile::WhisperTurbo | crate::config::AsrProfile::WhisperBase => {
+                match WhisperRecognizer::new(
+                    &model_dir,
+                    crate::compute::inference_threads() as i32,
+                    false,
+                ) {
+                    Ok(mut r) => {
+                        if let Err(e) = r.set_language(&config.language) {
+                            let _ =
+                                app.emit("asr_error", serde_json::json!({"error": e.to_string()}));
+                            // Don't advertise readiness: the recognizer
+                            // would transcribe in the wrong language.
+                            return (None, None, false);
+                        }
+                        whisper = Some(r);
+                        let _ = app.emit("asr_ready", serde_json::json!({ "backend": "whisper" }));
+                    }
+                    Err(e) => {
+                        let _ = app.emit("asr_error", serde_json::json!({"error": e.to_string()}));
+                    }
+                }
+            }
+        }
+    } else {
+        let _ = app.emit(
+            "asr_error",
+            serde_json::json!({"error": format!("Model {} not downloaded", model_id)}),
+        );
+    }
+    (parakeet, whisper, true)
+}
+
+/// Preload ASR + LLM engines once at startup so the first press never pays
+/// model-load latency (which pegged the CPU and made the app look hung).
+/// Skips when models are missing (first press downloads as before) or a
+/// press is already active (that press populates the cache instead).
+/// A press landing mid-warm simply builds its own set; the overlap falls
+/// back gracefully and the next press hits the cache.
+pub fn warm_engines(app: crate::sink::AppHandle, config: AppConfig) {
+    // Merge first: the warm cache key must match what a press will compute.
+    let config = crate::config::with_dictionary_hotwords(config);
+    WARMING.store(true, Ordering::SeqCst);
+    let _guard = WarmGuard;
+    let key = engine_key(&config);
+    if ENGINE_CACHE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|c| c.key == key)
+    {
+        return;
+    }
+    if get_running_flag().load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(vad_manifest) = MODEL_MANIFEST.iter().find(|m| m.id == "silero-vad") else {
+        return;
+    };
+    if !verify_model(&config.model_dir, vad_manifest) {
+        // Small file, but a first press must not block on it. Fetch it here,
+        // on the warm thread, and let progress travel through the event sink.
+        let vad_dir = config.model_dir.join("silero-vad");
+        if std::fs::create_dir_all(&vad_dir).is_err() {
+            return;
+        }
+        let app_dl = app.clone();
+        let id = vad_manifest.id;
+        if download_model(vad_manifest, &vad_dir, move |percent, bytes| {
+            let _ = app_dl.emit(
+                "model_download_progress",
+                serde_json::json!({"id": id, "percent": percent, "bytes": bytes}),
+            );
+        })
+        .is_err()
+        {
+            return;
+        }
+    }
+    let vad_ok = verify_model(&config.model_dir, vad_manifest);
+    let asr_ok = find_model(config.asr_profile.model_id())
+        .map(|m| verify_model(&config.model_dir, m))
+        .unwrap_or(false);
+    if !(vad_ok && asr_ok) {
+        return;
+    }
+    eprintln!("[pipeline] warming ASR in background");
+    let (parakeet, whisper, _) = build_recognizers(&config, &app);
+    // Deliberately do not load the cleanup LLM here. On a 15 GB machine the
+    // ASR set plus llama.cpp can sit for hours without a second press; the
+    // first pass that actually needs cleanup builds it on the worker thread.
+    store_engines(key, parakeet, whisper, None);
+    eprintln!("[pipeline] ASR warm");
+}
+
+pub struct PipelineController {
+    running: Arc<AtomicBool>,
+    app: crate::sink::AppHandle,
+    config: AppConfig,
+    silero_path: PathBuf,
+    #[allow(dead_code)]
+    model_dir: PathBuf,
+}
+
+impl PipelineController {
+    pub fn new(app: crate::sink::AppHandle, config: AppConfig) -> Result<Self> {
+        // Merge the dictionary into the decode bias so a press computes the
+        // same engine key the warm cache stored.
+        let config = crate::config::with_dictionary_hotwords(config);
+        let running = get_running_flag().clone();
+        let model_dir = config.model_dir.clone();
+        let silero_path = model_dir.join("silero-vad").join("silero_vad.onnx");
+        let vad_manifest = MODEL_MANIFEST
+            .iter()
+            .find(|m| m.id == "silero-vad")
+            .unwrap();
+
+        // Use verify_model (existence + exact size) rather than `exists()`:
+        // a stale/truncated file from an old broken download would crash
+        // sherpa-onnx at VAD creation with an uncaught C++ exception.
+        let silero_valid = verify_model(&model_dir, vad_manifest);
+
+        eprintln!(
+            "[pipeline] model_dir={:?} profile={:?} silero_valid={}",
+            model_dir, config.asr_profile, silero_valid
+        );
+
+        if !silero_valid {
+            if silero_path.exists() {
+                std::fs::remove_file(&silero_path)?;
+                eprintln!("[pipeline] removed invalid silero VAD file, re-downloading");
+            }
+            std::fs::create_dir_all(model_dir.join("silero-vad"))?;
+            let model_dir_dl = model_dir.join("silero-vad");
+            // Surface progress to the frontend: start_listening blocks on
+            // this download, so a silent no-op callback leaves the UI hung
+            // with no feedback on first run.
+            let app_dl = app.clone();
+            let result = download_model(vad_manifest, &model_dir_dl, |percent, bytes| {
+                let _ = app_dl.emit(
+                    "model_download_progress",
+                    serde_json::json!({"id": vad_manifest.id, "percent": percent, "bytes": bytes}),
+                );
+            });
+            if let Err(e) = result {
+                let _ = app.emit(
+                    "asr_error",
+                    serde_json::json!({"error": format!("Failed to download VAD: {}", e)}),
+                );
+                running.store(false, Ordering::SeqCst);
+                return Err(anyhow::anyhow!("VAD model download failed"));
+            }
+        }
+
+        if !verify_model(&model_dir, vad_manifest) {
+            let _ = app.emit(
+                "asr_error",
+                serde_json::json!({"error": "Silero VAD model file not found after download attempt"}),
+            );
+            running.store(false, Ordering::SeqCst);
+            return Err(anyhow::anyhow!("Silero VAD model not found"));
+        }
+
+        // Lazy download of the selected ASR model (mirrors the VAD pattern
+        // above): if the profile's model files are missing, fetch them now
+        // instead of failing later inside the worker thread.
+        let asr_model_id = config.asr_profile.model_id();
+        let asr_manifest = MODEL_MANIFEST
+            .iter()
+            .find(|m| m.id == asr_model_id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown ASR model: {}", asr_model_id))?;
+        eprintln!(
+            "[pipeline] ASR model: {} (exists={})",
+            asr_model_id,
+            verify_model(&model_dir, asr_manifest)
+        );
+        if !verify_model(&model_dir, asr_manifest) {
+            let asr_dir = config.asr_profile.model_dir(&model_dir);
+            // A fetch already running (earlier PTT press, Models-page
+            // button) owns the resume file — don't spawn a second writer
+            // that download_model would only reject.
+            if crate::models::is_downloading(&asr_dir) {
+                running.store(false, Ordering::SeqCst);
+                return Err(anyhow::anyhow!(
+                    "ASR model {} still downloading in background — retry when the Models page shows 100%",
+                    asr_model_id
+                ));
+            }
+            std::fs::create_dir_all(&asr_dir)?;
+            eprintln!(
+                "[pipeline] ASR model {} missing, downloading in background to {}",
+                asr_model_id,
+                asr_dir.display()
+            );
+            // Never block the Tauri command on a ~500MB download (it hangs
+            // the backend until the last byte). Fetch on a worker thread and
+            // fail fast: the Models page shows live progress, retry start
+            // when it reports done.
+            let app_dl = app.clone();
+            std::thread::spawn(move || {
+                let res = download_model(asr_manifest, &asr_dir, |percent, bytes| {
+                    let _ = app_dl.emit(
+                        "model_download_progress",
+                        serde_json::json!({"id": asr_manifest.id, "percent": percent, "bytes": bytes}),
+                    );
+                });
+                match res {
+                    Ok(()) => {
+                        let _ = app_dl.emit(
+                            "model_download_progress",
+                            serde_json::json!({"id": asr_manifest.id, "percent": 100, "done": true}),
+                        );
+                        eprintln!("[pipeline] ASR model {} ready", asr_manifest.id);
+                    }
+                    Err(e) => {
+                        eprintln!("[pipeline] ASR model download FAILED: {}", e);
+                        let _ = app_dl.emit(
+                            "asr_error",
+                            serde_json::json!({"error": format!("Failed to download ASR model: {}", e)}),
+                        );
+                    }
+                }
+            });
+            running.store(false, Ordering::SeqCst);
+            return Err(anyhow::anyhow!(
+                "ASR model {} not downloaded yet — downloading in background, retry when the Models page shows 100%",
+                asr_model_id
+            ));
+        }
+
+        Ok(Self {
+            running,
+            app,
+            config,
+            silero_path,
+            model_dir,
+        })
+    }
+
+    pub fn start(&self) -> Result<()> {
+        // Held for the whole transition and released on every exit path below,
+        // including the error returns.
+        let _transition = TRANSITION.lock().unwrap_or_else(|e| e.into_inner());
+        if self.running.swap(true, Ordering::SeqCst) {
+            return Err(anyhow::anyhow!("Pipeline already running"));
+        }
+        // Claim a run id: this is what a stale worker checks, and a later
+        // start (below) mints a new one, so the old worker never comes back.
+        let run_id = begin_run();
+
+        let (tx, rx) = mpsc::channel::<Vec<f32>>();
+
+        // Prefer the stable device id; fall back to the positional index for
+        // configs written before `selected_mic_id` existed. `start_capture`
+        // matches by id, then by name, then falls back to the default device,
+        // so a stale selection degrades instead of refusing to record.
+        let mic_hint: Option<String> = self.config.selected_mic_id.clone().or_else(|| {
+            self.config.selected_mic_index.and_then(|i| {
+                crate::audio::list_input_devices().ok().and_then(|devices| {
+                    devices.get(i).map(|(name, id)| {
+                        if id.is_empty() {
+                            name.clone()
+                        } else {
+                            id.clone()
+                        }
+                    })
+                })
+            })
+        });
+
+        let app_clone = self.app.clone();
+        let config_clone = self.config.clone();
+        let running_clone = self.running.clone();
+        let silero_path = self.silero_path.clone();
+
+        // The callback must stop feeding the channel the moment the run flag
+        // drops: stop_pipeline drains this channel, and against a live
+        // producer that drain is unbounded — the "stuck at stopping" hangs
+        // were the stop-flush racing a microphone that never went quiet.
+        let producer_gate = running_clone.clone();
+
+        // A stream that dies mid-capture (unplugged mic, Bluetooth profile
+        // switch) must not leave the worker typing from a frozen buffer. Stop
+        // the run so it flushes what it has and exits, and tell the user.
+        let on_stream_error = {
+            let app = app_clone.clone();
+            let running = running_clone.clone();
+            move |msg: String| {
+                running.store(false, Ordering::SeqCst);
+                let _ = app.emit(
+                    "asr_error",
+                    serde_json::json!({
+                        "error": format!("Microphone stopped ({msg}). Reconnect it and try again.")
+                    }),
+                );
+            }
+        };
+
+        let audio = match crate::audio::start_capture(
+            mic_hint.as_deref(),
+            move |samples: &[f32]| {
+                if producer_gate.load(Ordering::Relaxed) {
+                    let _ = tx.send(samples.to_vec());
+                }
+            },
+            on_stream_error,
+        ) {
+            Ok(a) => {
+                eprintln!(
+                    "[pipeline] capturing from {:?} @ {}Hz {}ch {:?}",
+                    mic_hint.as_deref().unwrap_or("<default>"),
+                    a.sample_rate,
+                    a.channels,
+                    a.format
+                );
+                // Record what this machine actually negotiated, so an
+                // environment bug is diagnosable from the diagnostics file.
+                crate::diagnostics::record_audio(crate::diagnostics::AudioEnv {
+                    sample_rate: a.sample_rate,
+                    channels: a.channels,
+                    format: a.format.clone(),
+                });
+                a
+            }
+            Err(e) => {
+                let _ = app_clone.emit(
+                    "asr_error",
+                    serde_json::json!({"error": format!("Audio device error: {}", e)}),
+                );
+                running_clone.store(false, Ordering::SeqCst);
+                return Err(anyhow::anyhow!("audio device: {e}"));
+            }
+        };
+
+        let mic_sample_rate = audio.sample_rate;
+
+        let handle = std::thread::spawn(move || {
+            let _audio = audio;
+
+            let resampler: Option<sherpa_onnx::LinearResampler> = if mic_sample_rate != 16000 {
+                sherpa_onnx::LinearResampler::create(mic_sample_rate as i32, 16000)
+            } else {
+                None
+            };
+
+            // Take warm engines when the config matches. On a key mismatch the
+            // old set is dropped first (frees its backend) so the fresh
+            // build below can init without hitting BackendAlreadyInitialized.
+            // ponytail: take-then-build leaves a window where a press landing
+            // mid-warm builds a second ASR set; both stay alive until this
+            // worker hands its engines back, so peak RAM roughly doubles for
+            // that one press. The losable part — the process-wide LLM backend
+            // init — is serialised by LLM_BUILD; the duplicate ASR load is the
+            // accepted ceiling (upgrade path: warm under the same lock).
+            let key = engine_key(&config_clone);
+            let taken = ENGINE_CACHE.lock().unwrap().take();
+            let rebuild = taken.as_ref().map(|c| c.key != key).unwrap_or(true);
+            if !rebuild {
+                eprintln!("[pipeline] reusing warm engines");
+            }
+            let (mut parakeet, mut whisper, cached_llm) = match taken {
+                Some(c) if !rebuild => (c.parakeet, c.whisper, c.llm),
+                _ => (None, None, None),
+            };
+
+            let mut vad =
+                match VoiceActivityDetector::new(&silero_path, crate::vad::SPEECH_THRESHOLD) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = app_clone
+                            .emit("asr_error", serde_json::json!({"error": e.to_string()}));
+                        store_engines(key, parakeet, whisper, cached_llm);
+                        return;
+                    }
+                };
+
+            // Owns LLM cleanup/typing/clipboard/history for this worker thread.
+            // Created here (rather than moved from the controller) so inference
+            // stays on the thread that uses it. Reuses the cached model when
+            // the config matches, so repeat presses skip the ~1GB reload.
+            let mut llm_processor = match cached_llm {
+                Some(llm) => LlmProcessor::from_cached(config_clone.clone(), Some(llm)),
+                None => {
+                    let _build = LLM_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+                    LlmProcessor::new(config_clone.clone())
+                }
+            };
+
+            if rebuild {
+                let (p, w, lang_ok) = build_recognizers(&config_clone, &app_clone);
+                parakeet = p;
+                whisper = w;
+                if !lang_ok {
+                    running_clone.store(false, Ordering::SeqCst);
+                    return;
+                }
+            } else if let Some(ref mut ws) = whisper {
+                // Warm recognizer: re-check the language (no-op when
+                // unchanged) so a settings change applies without a rebuild.
+                if let Err(e) = ws.set_language(&config_clone.language) {
+                    let _ =
+                        app_clone.emit("asr_error", serde_json::json!({"error": e.to_string()}));
+                    running_clone.store(false, Ordering::SeqCst);
+                    return;
+                }
+            }
+
+            // Live mic meter for the widget (max ~15Hz). Doubles as proof the
+            // mic delivers signal: flat zero here means a device problem,
+            // not a pipeline problem.
+            let mut last_level = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap_or_else(Instant::now);
+
+            // Accumulate VAD segments into sentence groups. A segment is a
+            // pause boundary, not a sentence: joining before the deterministic
+            // pass is what keeps "the testing | of the application" one
+            // sentence instead of capitalising "Of".
+            let mut pending_text = String::new();
+            let mut pending_timestamps: Vec<f32> = Vec::new();
+            let mut pending_durations: Vec<f32> = Vec::new();
+            let mut preview_buffer: Vec<f32> = Vec::new();
+            let mut last_preview = Instant::now();
+
+            // Feed one chunk through VAD → ASR → sentence assembly → LLM → output.
+            let mut pump = |samples: &[f32]| {
+                let resampled: Vec<f32> = if let Some(ref r) = resampler {
+                    r.resample(samples, false)
+                } else {
+                    samples.to_vec()
+                };
+                if last_level.elapsed() >= Duration::from_millis(66) {
+                    last_level = Instant::now();
+                    let n = resampled.len().max(1);
+                    let level = (resampled.iter().map(|s| s * s).sum::<f32>() / n as f32)
+                        .sqrt()
+                        .clamp(0.0, 1.0);
+                    let _ = app_clone.emit("mic_level", level);
+                }
+                preview_buffer.extend_from_slice(&resampled);
+                if preview_buffer.len() > 16000 * 8 {
+                    let drain = preview_buffer.len() - 16000 * 8;
+                    preview_buffer.drain(..drain);
+                }
+                if config_clone.live_partial
+                    && last_preview.elapsed() >= Duration::from_millis(900)
+                    && let Some(text) =
+                        decode_preview(&parakeet, &whisper, &config_clone.hotwords, &preview_buffer)
+                {
+                    last_preview = Instant::now();
+                    let _ = app_clone.emit("partial", serde_json::json!({ "text": text }));
+                }
+                vad.feed(&resampled);
+                // Drain every queued segment, not just the first one: the
+                // stop path breaks out of the loop right after this, so
+                // anything still queued would be dropped unheard.
+                while let Some(segment) = vad.try_get_segment() {
+                    let decoded = transcribe_segment(
+                        &segment,
+                        &parakeet,
+                        &whisper,
+                        &config_clone.hotwords,
+                        run_id,
+                        &app_clone,
+                    );
+                    // The segment owns this audio now; a stale preview must
+                    // not leak into the next sentence.
+                    preview_buffer.clear();
+                    last_preview = Instant::now();
+                    if let Some((text, timestamps, durations)) = decoded {
+                        if starts_new_sentence(&pending_text, &text)
+                            && !pending_text.trim().is_empty()
+                        {
+                            llm_processor.process(
+                                &pending_text,
+                                &pending_timestamps,
+                                &pending_durations,
+                                run_id,
+                                &app_clone,
+                                true,
+                            );
+                            pending_text.clear();
+                            pending_timestamps.clear();
+                            pending_durations.clear();
+                        }
+                        if !pending_text.is_empty() {
+                            pending_text.push(' ');
+                        }
+                        pending_text.push_str(&text);
+                        pending_timestamps.extend(timestamps);
+                        pending_durations.extend(durations);
+                    }
+                }
+                vad.reset_after_segment();
+            };
+
+            loop {
+                if !run_is_current(run_id) {
+                    // Superseded by a newer press: exit quietly without
+                    // flushing — the successor owns typing now, and a flush
+                    // here would duplicate text into the focused window.
+                    break;
+                }
+                // Check every iteration, not just on timeout: the mic streams
+                // continuously, so with audio flowing the timeout arm never
+                // fires and a timeout-only check wedges the worker forever.
+                if !running_clone.load(Ordering::SeqCst) {
+                    // Stopped mid-utterance: drain leftover audio, then
+                    // force-close the trailing segment with silence so
+                    // the last words are still transcribed and typed.
+                    while let Ok(samples) = rx.try_recv() {
+                        pump(&samples);
+                    }
+                    // Silence *at the capture rate*, never a fixed count: see
+                    // flush_silence_samples.
+                    pump(&vec![0.0f32; flush_silence_samples(mic_sample_rate)]);
+                    break;
+                }
+                match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(samples) => pump(&samples),
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+
+            if !pending_text.trim().is_empty()
+                && run_is_current(run_id)
+                && !CANCELLED.load(Ordering::SeqCst)
+            {
+                llm_processor.process(
+                    &pending_text,
+                    &pending_timestamps,
+                    &pending_durations,
+                    run_id,
+                    &app_clone,
+                    false,
+                );
+            }
+
+            // Hand warm engines back for the next press.
+            store_engines(key, parakeet, whisper, llm_processor.into_llm());
+        });
+        // Reap any previous worker first: two live workers would overlap
+        // their LLM backends (see WORKER). Normally absent (stop joins).
+        if let Some(old) = WORKER.lock().unwrap().replace(handle) {
+            let _ = old.join();
+        }
+
+        Ok(())
+    }
+}
+
+pub fn start_pipeline(app: crate::sink::AppHandle, config: AppConfig) -> Result<()> {
+    CANCELLED.store(false, Ordering::SeqCst);
+    let controller = PipelineController::new(app.clone(), config.clone())?;
+    controller.start()?;
+    Ok(())
+}
+
+/// Abandon the current utterance without transcribing or delivering it.
+///
+/// Invalidates the run before clearing the flag: the worker checks the run id
+/// first, so it exits quietly instead of running the stop-flush. Never joins on
+/// the caller's thread — cancel is a UI action.
+pub fn cancel_pipeline() {
+    CANCELLED.store(true, Ordering::SeqCst);
+    let _ = begin_run();
+    if let Some(flag) = PIPELINE_RUNNING.get() {
+        flag.store(false, Ordering::SeqCst);
+    }
+    if let Some(handle) = WORKER.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        std::thread::spawn(move || {
+            let _ = handle.join();
+        });
+    }
+}
+
+/// Drop the warm ASR/LLM engines after a period of inactivity. The next press
+/// rebuilds them on the worker thread; this is the memory/latency trade.
+pub fn unload_cached_engines() {
+    let _transition = TRANSITION.lock().unwrap_or_else(|e| e.into_inner());
+    if PIPELINE_RUNNING
+        .get()
+        .is_some_and(|flag| flag.load(Ordering::SeqCst))
+    {
+        return;
+    }
+    if let Some(cache) = ENGINE_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        eprintln!("[pipeline] idle: unloading warm engines");
+        drop(cache);
+    }
+}
+
+/// Join a worker with a deadline. Returns false when the deadline passed —
+/// the thread keeps running (leaked deliberately) and its output is
+/// invalidated by the caller, so a hung model can never wedge the widget.
+/// ponytail: leaking the thread is the accepted ceiling; the upgrade path is
+/// moving the local LLM into a subprocess that can be killed outright.
+fn join_with_timeout(handle: std::thread::JoinHandle<()>, timeout: Duration) -> bool {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = handle.join();
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(timeout).is_ok()
+}
+
+pub fn stop_pipeline() {
+    // Order matters, and `TRANSITION` is what makes this order safe. The worker
+    // checks its run id *before* the stop flag, so invalidating first sent it
+    // down the superseded branch and it exited without draining — the tail
+    // this stop is supposed to transcribe was dropped every time. Clear → join
+    // → invalidate lets the flush through; the transition lock stops a new
+    // press from setting the flag back to true (reviving this worker) while the
+    // join is in flight, which is the bug `PIPELINE_GEN` was added for.
+    let _transition = TRANSITION.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(flag) = PIPELINE_RUNNING.get() {
+        flag.store(false, Ordering::SeqCst);
+    }
+    // Join the worker so its stop-flush (transcribe tail → type) and engine
+    // hand-back finish before the next press spawns a new worker. Bounded: a
+    // hung model must not wedge the widget, so past the deadline the run is
+    // invalidated — the worker's late output fails the run check and types
+    // nothing.
+    if let Some(handle) = WORKER.lock().unwrap().take() {
+        eprintln!("[pipeline] stop: joining worker");
+        let joined = join_with_timeout(handle, Duration::from_secs(5));
+        if joined {
+            eprintln!("[pipeline] stop: worker joined");
+        } else {
+            eprintln!(
+                "[pipeline] stop: worker did not finish in 5s — discarding its output, returning to idle"
+            );
+        }
+    }
+    // Only safe to invalidate once the run it belonged to has finished.
+    let _ = begin_run();
+}
+
+#[cfg(test)]
+mod typed_payload_tests {
+    use super::typed_payload;
+
+    /// A mid-stream sentence chunk types with a trailing space so the next
+    /// sentence does not glue onto it ("testing it.Let's"); the final chunk
+    /// stays bare so the transcript does not end in a stray space.
+    #[test]
+    fn mid_sentence_chunks_keep_a_trailing_space() {
+        assert_eq!(typed_payload("testing it.", true), "testing it. ");
+        assert_eq!(typed_payload("testing it.", false), "testing it.");
+        assert_eq!(typed_payload("", true), "", "empty stays empty either way");
+    }
+}
+
+#[cfg(test)]
+mod stop_watchdog_tests {
+    use super::join_with_timeout;
+    use std::time::Duration;
+
+    #[test]
+    fn a_hanging_worker_times_out_and_a_healthy_one_reports_done() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let hanging = std::thread::spawn(move || {
+            let _ = rx.recv(); // blocks until the test drops tx
+        });
+        assert!(!join_with_timeout(hanging, Duration::from_millis(50)));
+
+        let done = std::thread::spawn(|| {});
+        assert!(join_with_timeout(done, Duration::from_secs(5)));
+        drop(tx);
+    }
+}
+
+#[cfg(test)]
+mod run_id_tests {
+    use super::{begin_run, engine_key, run_is_current};
+    use crate::config::{AppConfig, AsrProfile, LlmProvider};
+
+    /// The regression this id exists for: a stop then a start must leave the
+    /// old run dead even though the shared flag goes true again afterwards.
+    #[test]
+    fn a_later_run_never_revives_an_earlier_one() {
+        let _serial = crate::pipeline::PIPELINE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let first = begin_run();
+        assert!(run_is_current(first));
+
+        let _ = begin_run(); // stop_pipeline
+        assert!(!run_is_current(first), "stop must invalidate the run");
+
+        let second = begin_run(); // start_pipeline
+        assert!(
+            !run_is_current(first),
+            "the old run must stay dead after a later start"
+        );
+        assert!(run_is_current(second));
+    }
+
+    /// The warm cache keys on everything that changes the engines: a missed
+    /// field reuses a wrong recognizer/LLM instead of rebuilding.
+    #[test]
+    fn preview_ignores_silence_and_short_buffers() {
+        assert!(super::decode_preview(&None, &None, "", &[0.0; 16_000]).is_none());
+        assert!(super::decode_preview(&None, &None, "", &[0.1; 100]).is_none());
+        assert!(super::decode_preview(&None, &None, "", &[0.1; 16_000]).is_none());
+    }
+
+    #[test]
+    fn unloading_without_a_cache_is_safe() {
+        crate::pipeline::unload_cached_engines();
+        crate::pipeline::unload_cached_engines();
+    }
+
+    #[test]
+    fn engine_key_covers_profile_language_hotwords_and_llm() {
+        let base = AppConfig::default();
+        let key = engine_key(&base);
+        let mut other = base.clone();
+        other.language = "de".to_string();
+        assert_ne!(key, engine_key(&other), "language must change the key");
+        other = base.clone();
+        other.hotwords = "Floure".to_string();
+        assert_ne!(key, engine_key(&other), "hotwords must change the key");
+        other = base.clone();
+        other.asr_profile = AsrProfile::WhisperBase;
+        assert_ne!(key, engine_key(&other), "profile must change the key");
+        other = base.clone();
+        other.llm_provider = LlmProvider::OpenRouter;
+        assert_ne!(key, engine_key(&other), "llm provider must change the key");
+        other = base.clone();
+        other.llm_model = "openai/gpt-4o-mini".to_string();
+        assert_ne!(key, engine_key(&other), "llm model must change the key");
+        assert_eq!(key, engine_key(&base), "same config must reuse");
+    }
+}
+
+#[cfg(test)]
+mod flush_tests {
+    use super::flush_silence_samples;
+    use crate::vad::MIN_SILENCE_SECS;
+
+    /// The regression this guards: a fixed 8000-sample flush was 500ms at
+    /// 16 kHz but only ~167ms at 48 kHz — under the VAD's close threshold, so
+    /// the trailing segment stayed open and was dropped. The flush must be
+    /// derived from the negotiated rate and clear the threshold at every rate.
+    #[test]
+    fn flush_silence_closes_the_trailing_segment_at_every_rate() {
+        for rate in [8_000u32, 16_000, 22_050, 44_100, 48_000, 96_000] {
+            let secs = flush_silence_samples(rate) as f32 / rate as f32;
+            assert!(
+                secs >= MIN_SILENCE_SECS,
+                "{rate} Hz: flush is {secs}s, under the VAD's {MIN_SILENCE_SECS}s close threshold"
+            );
+            assert!(
+                secs >= 0.5,
+                "{rate} Hz: flush {secs}s is under the 0.5s trailing-silence floor \
+                 Parakeet TDT needs to emit the final token (moona3k/macparakeet #615)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_old_fixed_sample_count_would_have_failed_at_high_rates() {
+        // Documents why the fix exists: the literal was fine on the developer's
+        // 16 kHz mic and broken on everyone else's 48 kHz one.
+        assert!(
+            8000.0 / 16_000.0 >= MIN_SILENCE_SECS,
+            "8000 was fine at 16 kHz"
+        );
+        assert!(8000.0 / 48_000.0 < MIN_SILENCE_SECS, "and broken at 48 kHz");
+    }
+
+    /// Length preservation: resampling must not change the duration. 48 kHz to
+    /// 16 kHz is exactly 1/3, so 100 ms in must be ~100 ms out.
+    ///
+    /// This also pins down a real quirk of `LinearResampler`: a `flush: false`
+    /// call withholds a few samples of tail for interpolation continuity. The
+    /// pipeline never flushes explicitly, but the 700 ms of silence fed at stop
+    /// is the next `resample` call, so those samples are absorbed rather than
+    /// lost — and the withheld tail is under one VAD window (32 ms) anyway.
+    #[test]
+    fn resampling_preserves_duration_once_flushed() {
+        let Some(r) = sherpa_onnx::LinearResampler::create(48_000, 16_000) else {
+            return; // native library unavailable; nothing to assert
+        };
+        let input = vec![0.0f32; 4_800];
+        let streamed = r.resample(&input, false);
+        let tail = r.resample(&[], true);
+        let total = (streamed.len() + tail.len()) as i64;
+        let expected = 1_600i64;
+        assert!(
+            (total - expected).abs() <= 1,
+            "flushed total should be ~{expected}, got {total} (streamed {}, tail {})",
+            streamed.len(),
+            tail.len()
+        );
+    }
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    #[test]
+    fn cancel_is_quiet_and_drops_the_run() {
+        let _serial = crate::pipeline::PIPELINE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let run = begin_run();
+        assert!(run_is_current(run));
+
+        cancel_pipeline();
+
+        assert!(!run_is_current(run), "cancel must invalidate the run");
+        assert!(!get_running_flag().load(Ordering::SeqCst));
+        CANCELLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn vad_segments_assemble_into_one_sentence() {
+        let segments = [
+            "Mm-hmm.",
+            "So here is the testing.",
+            "of the application I'm running.",
+            "See you can see after testing there was a full stop.",
+            "then it should have capitalized the O of O.",
+        ];
+        let mut groups = Vec::new();
+        let mut current = String::new();
+        for segment in segments {
+            if starts_new_sentence(&current, segment) && !current.trim().is_empty() {
+                groups.push(current.trim().to_string());
+                current.clear();
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(segment);
+        }
+        if !current.trim().is_empty() {
+            groups.push(current.trim().to_string());
+        }
+        assert_eq!(groups.len(), 4);
+        assert_eq!(
+            crate::text::normalize(&groups[1]),
+            "So here is the testing of the application I'm running."
+        );
+        assert_eq!(
+            crate::text::normalize(&groups[3]),
+            "Then it should have capitalized the O of O."
+        );
+    }
+
+    #[test]
+    fn off_mode_emits_deterministic_text_without_an_llm() {
+        let _serial = crate::pipeline::PIPELINE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        CANCELLED.store(false, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("floure-text-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: serialised by SERIAL.
+        unsafe { std::env::set_var("STT_DATA_DIR", &dir) };
+
+        let mut config = AppConfig::default();
+        config.llm_mode = LlmMode::Off;
+        config.typing_enabled = false;
+        config.clipboard_enabled = false;
+        let (sink, mut rx) = crate::sink::EventSink::new();
+        let app = sink.app_handle();
+        let mut processor = LlmProcessor::from_cached(config, None);
+        let run_id = begin_run();
+        processor.process("what can we do", &[], &[], run_id, &app, false);
+
+        let mut final_text = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::events::EngineEvent::CleanupDone { text, .. } = event {
+                final_text = Some(text);
+            }
+        }
+        assert_eq!(final_text.as_deref(), Some("What can we do?"));
+        let conn = crate::history::open(&dir.join("history.db")).unwrap();
+        let stored: String = conn
+            .query_row(
+                "SELECT processed_text FROM transcripts ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "What can we do?");
+
+        // SAFETY: still serialised.
+        unsafe { std::env::remove_var("STT_DATA_DIR") };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The guarantee that matters: a cancelled utterance emits no Final and
+    /// never reaches the history file, so nothing can be typed from it.
+    #[test]
+    fn cancelled_utterance_emits_nothing_and_writes_no_history() {
+        let _serial = crate::pipeline::PIPELINE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("floure-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: serialised by SERIAL; no other test in this binary reads
+        // STT_DATA_DIR at the same time.
+        unsafe { std::env::set_var("STT_DATA_DIR", &dir) };
+        CANCELLED.store(true, Ordering::SeqCst);
+
+        let (sink, mut rx) = crate::sink::EventSink::new();
+        let app = sink.app_handle();
+        let mut processor = LlmProcessor::from_cached(AppConfig::default(), None);
+        let run_id = begin_run();
+        processor.process("hello world", &[], &[], run_id, &app, false);
+
+        assert!(rx.try_recv().is_err(), "cancelled audio must stay silent");
+        let rows = if dir.join("history.db").exists() {
+            let conn = crate::history::open(&dir.join("history.db")).unwrap();
+            conn.query_row("SELECT COUNT(*) FROM transcripts", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap()
+        } else {
+            0
+        };
+        assert_eq!(rows, 0, "cancelled audio must not be saved");
+
+        CANCELLED.store(false, Ordering::SeqCst);
+        // SAFETY: still serialised by SERIAL.
+        unsafe { std::env::remove_var("STT_DATA_DIR") };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

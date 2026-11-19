@@ -1,0 +1,6 @@
+[tools]
+rust = "1.99.1"
+
+[env]
+CARGO_BUILD_JOBS = "2"
+CMAKE_BUILD_PARALLEL_LEVEL = "2"

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>floure</id>
+  <name>Floure</name>
+  <summary>Local-first dictation for your desktop</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>
+      Floure turns speech into clean text on your own machine. Press the
+      shortcut, speak, and the transcript is typed into the window that had
+      focus or copied to the clipboard.
+    </p>
+    <p>
+      Audio stays local by default. Recognition uses Parakeet or Whisper,
+      optional cleanup uses a local model, and the dictionary biases decoding
+      toward the names and jargon you actually use.
+    </p>
+  </description>
+  <launchable type="desktop-id">floure.desktop</launchable>
+  <url type="homepage">https://www.floure.in/</url>
+  <url type="bugtracker">https://github.com/IntegerAlex/floure-core/issues</url>
+  <developer_name>Akshat Kotpalliwar</developer_name>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.3.0" date="2026-11-06" />
+  </releases>
+</component>
