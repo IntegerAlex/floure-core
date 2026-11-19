@@ -519,7 +519,7 @@ fn transcribe_segment(
         padded = segment
             .iter()
             .copied()
-            .chain(std::iter::repeat(0.0f32).take(rate * PARAKEET_TAIL_PAD_MS / 1000))
+            .chain(std::iter::repeat_n(0.0f32, rate * PARAKEET_TAIL_PAD_MS / 1000))
             .collect::<Vec<f32>>();
         &padded
     } else {
