@@ -41,18 +41,18 @@ section = "utils"
 priority = "optional"
 depends = "$auto"
 assets = [
-  ["target/release/floure", "usr/bin/", "755"],
-  ["packaging/floure.desktop", "usr/share/applications/", "644"],
-  ["packaging/floure.metainfo.xml", "usr/share/metainfo/", "644"],
-  ["packaging/icons/32x32.png", "usr/share/icons/hicolor/32x32/apps/floure.png", "644"],
-  ["packaging/icons/48x48.png", "usr/share/icons/hicolor/48x48/apps/floure.png", "644"],
-  ["packaging/icons/64x64.png", "usr/share/icons/hicolor/64x64/apps/floure.png", "644"],
-  ["packaging/icons/128x128.png", "usr/share/icons/hicolor/128x128/apps/floure.png", "644"],
-  ["packaging/icons/256x256.png", "usr/share/icons/hicolor/256x256/apps/floure.png", "644"],
-  ["packaging/icons/512x512.png", "usr/share/icons/hicolor/512x512/apps/floure.png", "644"],
-  ["packaging/icons/floure.svg", "usr/share/icons/hicolor/scalable/apps/floure.svg", "644"],
-  ["LICENSE", "usr/share/licenses/floure/", "644"],
-  ["crates/floure-app/assets/fonts/OFL.txt", "usr/share/licenses/floure/OFL-Inter.txt", "644"],
+  ["../../target/release/floure", "usr/bin/", "755"],
+  ["../../packaging/floure.desktop", "usr/share/applications/", "644"],
+  ["../../packaging/floure.metainfo.xml", "usr/share/metainfo/", "644"],
+  ["../../packaging/icons/32x32.png", "usr/share/icons/hicolor/32x32/apps/floure.png", "644"],
+  ["../../packaging/icons/48x48.png", "usr/share/icons/hicolor/48x48/apps/floure.png", "644"],
+  ["../../packaging/icons/64x64.png", "usr/share/icons/hicolor/64x64/apps/floure.png", "644"],
+  ["../../packaging/icons/128x128.png", "usr/share/icons/hicolor/128x128/apps/floure.png", "644"],
+  ["../../packaging/icons/256x256.png", "usr/share/icons/hicolor/256x256/apps/floure.png", "644"],
+  ["../../packaging/icons/512x512.png", "usr/share/icons/hicolor/512x512/apps/floure.png", "644"],
+  ["../../packaging/icons/floure.svg", "usr/share/icons/hicolor/scalable/apps/floure.svg", "644"],
+  ["../../LICENSE", "usr/share/licenses/floure/", "644"],
+  ["assets/fonts/OFL.txt", "usr/share/licenses/floure/OFL-Inter.txt", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -61,16 +61,16 @@ summary = "Local-first dictation with a native GPUI interface"
 license = "GPL-3.0-or-later"
 url = "https://www.floure.in/"
 assets = [
-  { source = "target/release/floure", dest = "/usr/bin/floure", mode = "755" },
-  { source = "packaging/floure.desktop", dest = "/usr/share/applications/floure.desktop", mode = "644" },
-  { source = "packaging/floure.metainfo.xml", dest = "/usr/share/metainfo/floure.metainfo.xml", mode = "644" },
-  { source = "packaging/icons/32x32.png", dest = "/usr/share/icons/hicolor/32x32/apps/floure.png", mode = "644" },
-  { source = "packaging/icons/48x48.png", dest = "/usr/share/icons/hicolor/48x48/apps/floure.png", mode = "644" },
-  { source = "packaging/icons/64x64.png", dest = "/usr/share/icons/hicolor/64x64/apps/floure.png", mode = "644" },
-  { source = "packaging/icons/128x128.png", dest = "/usr/share/icons/hicolor/128x128/apps/floure.png", mode = "644" },
-  { source = "packaging/icons/256x256.png", dest = "/usr/share/icons/hicolor/256x256/apps/floure.png", mode = "644" },
-  { source = "packaging/icons/512x512.png", dest = "/usr/share/icons/hicolor/512x512/apps/floure.png", mode = "644" },
-  { source = "packaging/icons/floure.svg", dest = "/usr/share/icons/hicolor/scalable/apps/floure.svg", mode = "644" },
-  { source = "LICENSE", dest = "/usr/share/licenses/floure/LICENSE", mode = "644" },
-  { source = "crates/floure-app/assets/fonts/OFL.txt", dest = "/usr/share/licenses/floure/OFL-Inter.txt", mode = "644" },
+  { source = "../../target/release/floure", dest = "/usr/bin/floure", mode = "755" },
+  { source = "../../packaging/floure.desktop", dest = "/usr/share/applications/floure.desktop", mode = "644" },
+  { source = "../../packaging/floure.metainfo.xml", dest = "/usr/share/metainfo/floure.metainfo.xml", mode = "644" },
+  { source = "../../packaging/icons/32x32.png", dest = "/usr/share/icons/hicolor/32x32/apps/floure.png", mode = "644" },
+  { source = "../../packaging/icons/48x48.png", dest = "/usr/share/icons/hicolor/48x48/apps/floure.png", mode = "644" },
+  { source = "../../packaging/icons/64x64.png", dest = "/usr/share/icons/hicolor/64x64/apps/floure.png", mode = "644" },
+  { source = "../../packaging/icons/128x128.png", dest = "/usr/share/icons/hicolor/128x128/apps/floure.png", mode = "644" },
+  { source = "../../packaging/icons/256x256.png", dest = "/usr/share/icons/hicolor/256x256/apps/floure.png", mode = "644" },
+  { source = "../../packaging/icons/512x512.png", dest = "/usr/share/icons/hicolor/512x512/apps/floure.png", mode = "644" },
+  { source = "../../packaging/icons/floure.svg", dest = "/usr/share/icons/hicolor/scalable/apps/floure.svg", mode = "644" },
+  { source = "../../LICENSE", dest = "/usr/share/licenses/floure/LICENSE", mode = "644" },
+  { source = "assets/fonts/OFL.txt", dest = "/usr/share/licenses/floure/OFL-Inter.txt", mode = "644" },
 ]
