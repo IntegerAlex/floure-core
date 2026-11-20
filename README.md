@@ -13,6 +13,18 @@ mic (cpal) → Silero VAD → Parakeet / Whisper (sherpa-onnx)
 The application is a native Rust binary built with [GPUI](https://gpui.rs/).
 There is no webview, no Node build step, and no browser process.
 
+## Screenshots
+
+The dictation overlay widget while you speak — waveform bars riding the mic
+envelope, live partial text, red recording dot:
+
+![dictation widget](https://raw.githubusercontent.com/IntegerAlex/floure-core/screenshots/pr28/docs/screenshots/pr28/widget-live-partial.png)
+
+| | |
+|---|---|
+| ![Dictate](https://raw.githubusercontent.com/IntegerAlex/floure-core/screenshots/pr28/docs/screenshots/pr28/screen-dictate.png) | ![History](https://raw.githubusercontent.com/IntegerAlex/floure-core/screenshots/pr28/docs/screenshots/pr28/screen-history.png) |
+| ![Stats](https://raw.githubusercontent.com/IntegerAlex/floure-core/screenshots/pr28/docs/screenshots/pr28/screen-stats.png) | ![Configuration](https://raw.githubusercontent.com/IntegerAlex/floure-core/screenshots/pr28/docs/screenshots/pr28/screen-config.png) |
+
 ## Requirements
 
 - Linux (X11 or Wayland) with working Vulkan or OpenGL drivers. GPUI renders
